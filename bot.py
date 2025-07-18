@@ -5,7 +5,11 @@ import logging
 import asyncio
 import random
 from datetime import datetime, timedelta
-from threading import Thread # Threading के लिए इम्पोर्ट करें
+from threading import Thread
+
+# लॉगिंग सेटअप को सबसे ऊपर ले जाएँ
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -14,7 +18,6 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineK
 try:
     from pyrogram.types import PollAnswer
 except ImportError:
-    # यदि Pyrogram का पुराना वर्ज़न है जहाँ PollAnswer सीधे import नहीं होता
     logger.warning("PollAnswer could not be imported directly from pyrogram.types. Using a fallback class. Please consider updating Pyrogram for full functionality.")
     class PollAnswer:
         def __init__(self, **kwargs):
@@ -22,7 +25,6 @@ except ImportError:
             self.poll_id = kwargs.get('poll_id')
             self.option_ids = kwargs.get('option_ids', [])
         
-        # Pyrogram के PollAnswer ऑब्जेक्ट के कुछ आवश्यक गुण और तरीके जोड़ें
         @property
         def from_user(self):
             return self.user
@@ -40,17 +42,13 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0))
 
 DB_NAME = "telegram_games_db"
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # Pyrogram Client Initialization
 if not all([API_ID, API_HASH, BOT_TOKEN, MONGO_URI]):
     logger.critical("CRITICAL ERROR: Missing one or more required environment variables (API_ID, API_HASH, BOT_TOKEN, MONGO_URI). Bot will not start.")
-    exit(1) # Exit if critical variables are missing
+    exit(1)
 
 app = Client(
-    "game_bot_session", # Session name
+    "game_bot_session",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
@@ -66,8 +64,6 @@ def home():
 
 @flask_app_instance.route('/healthz')
 def health_check():
-    # Pyrogram client connected status checking for healthz can be complex
-    # A simple approach for a basic health check:
     is_bot_running = app.is_connected
     return jsonify({"status": "healthy", "bot_running": is_bot_running}), 200
 
@@ -86,7 +82,6 @@ def init_mongo_collections():
         mongo_client = MongoClient(MONGO_URI)
         db = mongo_client[DB_NAME]
         
-        # Test connection
         mongo_client.admin.command('ping') 
         logger.info("MongoDB connected successfully within bot.py.")
 
@@ -95,12 +90,10 @@ def init_mongo_collections():
         game_states_collection = db["game_states"]
         channel_content_cache_collection = db["channel_content_cache"]
         
-        # TTL index for users to remove old data (e.g., after 1 year)
         users_collection.create_index([("last_updated", 1)], expireAfterSeconds=365 * 24 * 60 * 60) 
         logger.info("TTL index on 'users' collection created/updated.")
     except Exception as e:
         logger.critical(f"Failed to connect to MongoDB or set up indexes: {e}")
-        # Re-raise the exception to be caught by the calling function
         raise 
 
 # Game Constants
@@ -116,7 +109,7 @@ GAMES_LIST = [
     (GAME_NUMBER_GUESSING, "number_guessing")
 ]
 
-active_games = {} # Stores current game state for each chat_id
+active_games = {}
 
 # --- Helper Functions (Game Logic) ---
 
@@ -178,11 +171,8 @@ async def save_game_state_to_db(chat_id: int):
         try:
             temp_game_state = active_games[chat_id].copy()
             if "timer_task" in temp_game_state and isinstance(temp_game_state["timer_task"], asyncio.Task):
-                del temp_game_state["timer_task"] # Task objects cannot be serialized
+                del temp_game_state["timer_task"]
             
-            # Ensure any other non-serializable objects are removed/converted
-            # e.g., Pyrogram Message objects or client objects should not be saved
-
             game_states_collection.update_one(
                 {"_id": chat_id},
                 {"$set": temp_game_state},
@@ -212,7 +202,7 @@ async def auto_end_game_timer(chat_id: int, client: Client):
         last_activity = game_state.get("last_activity_time", datetime.utcnow())
         time_since_last_activity = (datetime.utcnow() - last_activity).total_seconds()
 
-        if time_since_last_activity >= 300: # 5 minutes
+        if time_since_last_activity >= 300:
             await client.send_message(chat_id=chat_id, text="Game mein 5 minute se koi activity nahi. Game khatam kar diya gaya.")
             del active_games[chat_id]
             if game_states_collection:
@@ -309,7 +299,7 @@ async def send_next_quiz_question_with_timer(chat_id: int, client: Client):
             )
             game_state["current_question"] = {
                 "type": "poll",
-                "message_id": message.id, # Pyrogram uses message.id
+                "message_id": message.id,
                 "poll_id": message.poll.id,
                 "correct_answer_text": question_data["options"][question_data["correct_option_id"]],
                 "correct_option_id": question_data["correct_option_id"]
@@ -346,7 +336,7 @@ async def handle_quiz_answer_text(message: Message, client: Client):
         return
 
     if game_state["answered_this_round"]:
-        await message.reply_text("Iss sawal ka jawab pehle ही diya ja chuka hai.")
+        await message.reply_text("Iss sawal ka jawab pehle hi diya ja chuka hai.")
         return
 
     current_q = game_state["current_question"]
@@ -758,7 +748,7 @@ async def broadcast_command(client: Client, message: Message):
         await message.reply_text("Please message content provide karo broadcast ke liye.")
         return
     
-    message_content = " ".join(message.command[1:]) # Skip the command itself
+    message_content = " ".join(message.command[1:])
     
     sent_count = 0
     failed_count = 0
@@ -770,12 +760,12 @@ async def broadcast_command(client: Client, message: Message):
             try:
                 await client.send_message(chat_id=group["_id"], text=message_content)
                 sent_count += 1
-                await asyncio.sleep(0.1) # Small delay to avoid hitting Telegram API limits
+                await asyncio.sleep(0.1)
             except Exception as e:
                 logger.error(f"Could not send message to group {group['_id']}: {e}")
-                failed_count += 1
                 if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
                     groups_collection.update_one({"_id": group["_id"]}, {"$set": {"active": False}})
+                failed_count += 1
     else:
         logger.warning("Groups collection not initialized, cannot broadcast.")
 
@@ -925,6 +915,7 @@ async def button_handler(client: Client, query: CallbackQuery):
                                               parse_mode="Markdown",
                                               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{game_id}")]]))
             except Exception as e:
+                # Fallback in case message edit fails (e.g., message too old, or content changed too much)
                 await client.send_message(chat_id=game_id, text=f"{user.full_name} ne game join kar liya hai. Ab kul khiladi: {len(active_games[game_id]['players'])}",
                                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{game_id}")]]))
 
@@ -957,12 +948,7 @@ async def handle_poll_answer_main(client: Client, poll_answer: PollAnswer):
 # --- Flask Server Function ---
 def run_flask_server():
     """Starts the Flask server in a separate thread."""
-    # Koyeb 0.0.0.0 पर bind करने की मांग करता है
     logger.info("Starting Flask server on port 8080...")
-    # Flask को 8080 पर चलाने के लिए, gunicorn का उपयोग करें
-    # Flask की अपनी डेवलपमेंट सर्वर को सीधे प्रोडक्शन में उपयोग न करें
-    # यदि आप इसे सीधे Koyeb पर चला रहे हैं और Gunicorn की आवश्यकता नहीं है
-    # तो flask_app_instance.run(host="0.0.0.0", port=8080) का उपयोग करें
     try:
         from gunicorn.app.base import BaseApplication
 
@@ -981,16 +967,15 @@ def run_flask_server():
                 return self.application
 
         options = {
-            'bind': '%s:%s' % ('0.0.0.0', '8080'), # Koyeb पर पोर्ट 8080 पर चलाएं
-            'workers': 1, # सामान्यत: एक वर्कर ही पर्याप्त होता है
-            'accesslog': '-', # stdout पर लॉग करें
-            'errorlog': '-', # stderr पर लॉग करें
+            'bind': '%s:%s' % ('0.0.0.0', '8080'),
+            'workers': 1,
+            'accesslog': '-',
+            'errorlog': '-',
             'loglevel': 'info'
         }
         StandaloneApplication(flask_app_instance, options).run()
     except ImportError:
         logger.warning("Gunicorn not found, falling back to Flask's built-in server. This is not recommended for production.")
-        # यदि gunicorn इंस्टॉल नहीं है, तो Flask के बिल्ट-इन सर्वर का उपयोग करें (केवल डेवलपमेंट के लिए)
         flask_app_instance.run(host="0.0.0.0", port=8080)
     except Exception as e:
         logger.error(f"Error starting Flask server: {e}")
@@ -1000,30 +985,24 @@ def run_flask_server():
 async def start_telegram_bot_and_flask():
     """Main function to initialize and start the Pyrogram bot and Flask server."""
     
-    # MongoDB collections को initialize करें
     try:
         init_mongo_collections()
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Could not initialize MongoDB collections. Bot cannot start: {e}")
-        # MongoDB connection failure पर bot को शुरू न करें
         return 
 
-    # Flask सर्वर को एक अलग थ्रेड में शुरू करें
-    # Koyeb पर, HTTP पोर्ट आमतौर पर 8080 होता है।
-    # सुनिश्चित करें कि आपकी Koyeb सर्विस कॉन्फ़िगरेशन में पोर्ट 8080 पर HTTP रूट है।
     flask_thread = Thread(target=run_flask_server)
-    flask_thread.daemon = True # Flask thread को main thread के साथ खत्म होने दें
+    flask_thread.daemon = True
     flask_thread.start()
     logger.info("Flask server thread started.")
 
-    # Load active game states from DB
     await load_game_state_from_db()
 
     logger.info("Pyrogram bot application initializing...")
-    await app.start() # Bot को शुरू करें
+    await app.start()
     logger.info("Pyrogram bot started successfully.")
 
-    # Bot के शुरू होने के बाद, यदि कोई खेल सक्रिय था, तो उनके टाइमर को फिर से शुरू करें
+    # Re-initialize timers for existing active games that were in_progress
     for chat_id, game_state in active_games.items():
         if game_state["status"] == "in_progress":
             logger.info(f"Re-initializing timer for active game in chat {chat_id} (Type: {game_state['game_type']}).")
@@ -1043,25 +1022,24 @@ async def start_telegram_bot_and_flask():
                 game_state["timer_task"] = asyncio.create_task(
                     auto_end_game_timer(chat_id, app)
                 )
-            # सुनिश्चित करें कि timer_task को सक्रिय खेलों के लिए सहेजा जा रहा है
-            await save_game_state_to_db(chat_id)
+            await save_game_state_to_db(chat_id) # Save the state with the new task object
         else:
-            # यदि गेम 'waiting_for_players' स्थिति में था और बॉट बंद हो गया, तो उसे रद्द कर दें
+            # If a game was waiting for players but bot restarted, likely no one joined or it's stale.
+            # You might want to remove these or set a specific timeout for them.
             if game_state["status"] == "waiting_for_players":
                 logger.info(f"Game {game_state['game_type']} in chat {chat_id} was waiting for players. Clearing its state.")
                 del active_games[chat_id]
                 if game_states_collection:
                     game_states_collection.delete_one({"_id": chat_id})
 
-    await idle() # Bot को अनिश्चित काल तक चलते रहने दें
+    await idle()
 
     logger.info("Pyrogram bot stopping...")
-    await app.stop() # Bot को सुरक्षित रूप से बंद करें
+    await app.stop()
     logger.info("Pyrogram bot stopped.")
 
 
 if __name__ == "__main__":
-    # asyncio इवेंट लूप को चलाएं
     try:
         asyncio.run(start_telegram_bot_and_flask())
     except KeyboardInterrupt:
