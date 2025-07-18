@@ -11,12 +11,12 @@ from datetime import datetime, timedelta
 
 # --- Configuration ---
 # Environment variables se load karein, ye main.py se pass kiye ja sakte hain ya yahan bhi load ho sakte hain
-# Hum inko globally define kar rahe hain, main.py inko set karega ya environment se lenge
+# Hum inko globally declare kar rahe hain, main.py inko set karega ya environment se lenge
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
 MONGO_URI = os.getenv("YOUR_MONGO_URI")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0)) 
-CONTENT_CHANNEL_ID = int(os.getenv("CONTENT_CHANNEL_ID", 0))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0))
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", 0)) # Default to 0, should be set in .env
+CONTENT_CHANNEL_ID = int(os.getenv("CONTENT_CHANNEL_ID", 0)) # Default to 0, should be set in .env
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0)) # Default to 0, should be set in .env
 
 DB_NAME = "telegram_games_db"
 
@@ -35,22 +35,27 @@ channel_content_cache_collection = None
 def init_mongo_collections():
     global mongo_client, db, users_collection, groups_collection, game_states_collection, channel_content_cache_collection
     try:
+        logger.info("Attempting to connect to MongoDB...")
         mongo_client = MongoClient(MONGO_URI)
         db = mongo_client[DB_NAME]
         
+        # Test connection
+        mongo_client.admin.command('ping') 
+        logger.info("MongoDB connected successfully within bot.py.")
+
         users_collection = db["users"]
         groups_collection = db["groups"]
         game_states_collection = db["game_states"]
         channel_content_cache_collection = db["channel_content_cache"]
-        logger.info("MongoDB connected successfully within bot.py.")
-
+        
         # TTL index for users to remove old data (e.g., after 1 year)
+        # ensure_index is deprecated, create_index is current
         users_collection.create_index([("last_updated", 1)], expireAfterSeconds=365 * 24 * 60 * 60) 
         logger.info("TTL index on 'users' collection created/updated.")
     except Exception as e:
-        logger.error(f"Failed to connect to MongoDB or set up indexes in bot.py: {e}")
-        # Re-raise the exception or handle appropriately if MongoDB is critical
-        raise # To ensure main.py catches this if it's essential for bot to run
+        logger.critical(f"Failed to connect to MongoDB or set up indexes in bot.py: {e}")
+        # Re-raise the exception to be caught by the calling function (initialize_telegram_bot_application)
+        raise 
 
 # --- Game Constants ---
 GAME_QUIZ = "Quiz / Trivia"
@@ -65,8 +70,7 @@ GAMES_LIST = [
     (GAME_NUMBER_GUESSING, "number_guessing")
 ]
 
-active_games = {}
-
+active_games = {} # Stores current game state for each chat_id
 
 # --- Helper Functions ---
 
@@ -75,32 +79,44 @@ async def get_channel_content(game_type: str):
     if channel_content_cache_collection is None:
         logger.error("channel_content_cache_collection not initialized.")
         return []
-    content = list(channel_content_cache_collection.find({"game_type": game_type}))
-    if not content:
-        logger.warning(f"No content found for game type: {game_type} in DB.")
-    return content
+    try:
+        content = list(channel_content_cache_collection.find({"game_type": game_type}))
+        if not content:
+            logger.warning(f"No content found for game type: {game_type} in DB. Please add content to 'channel_content_cache' collection.")
+        return content
+    except Exception as e:
+        logger.error(f"Error fetching content from DB for {game_type}: {e}")
+        return []
 
 async def update_user_score(user_id: int, username: str, group_id: int, points: int):
     if users_collection is None:
-        logger.error("users_collection not initialized.")
+        logger.error("users_collection not initialized. Cannot update user score.")
         return
-    users_collection.update_one(
-        {"user_id": user_id},
-        {"$inc": {"total_score": points, f"group_scores.{group_id}": points},
-         "$set": {"username": username, "last_updated": datetime.utcnow()}},
-        upsert=True
-    )
-    logger.info(f"User {username} ({user_id}) scored {points} points in group {group_id}.")
+    try:
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$inc": {"total_score": points, f"group_scores.{group_id}": points},
+             "$set": {"username": username, "last_updated": datetime.utcnow()}},
+            upsert=True
+        )
+        logger.info(f"User {username} ({user_id}) scored {points} points in group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error updating user score for {username}: {e}")
+
 
 async def get_leaderboard(group_id: int = None):
     if users_collection is None:
-        logger.error("users_collection not initialized.")
+        logger.error("users_collection not initialized. Cannot get leaderboard.")
         return []
-    if group_id:
-        # MongoDB stores keys as strings in dictionaries, so group_id needs to be stringified
-        return list(users_collection.find().sort(f"group_scores.{group_id}", -1).limit(10))
-    else:
-        return list(users_collection.find().sort("total_score", -1).limit(10))
+    try:
+        if group_id:
+            # MongoDB stores keys as strings in dictionaries, so group_id needs to be stringified
+            return list(users_collection.find().sort(f"group_scores.{group_id}", -1).limit(10))
+        else:
+            return list(users_collection.find().sort("total_score", -1).limit(10))
+    except Exception as e:
+        logger.error(f"Error getting leaderboard: {e}")
+        return []
 
 async def is_admin(chat_id: int, user_id: int, bot_instance: Application.bot):
     try:
@@ -113,23 +129,45 @@ async def is_admin(chat_id: int, user_id: int, bot_instance: Application.bot):
 
 async def save_game_state_to_db(chat_id: int):
     if game_states_collection is None:
-        logger.error("game_states_collection not initialized.")
+        logger.error("game_states_collection not initialized. Cannot save game state.")
         return
     if chat_id in active_games:
-        game_states_collection.update_one(
-            {"_id": chat_id}, # Use chat_id as the unique ID for the game state
-            {"$set": active_games[chat_id]},
-            upsert=True # Create if not exists, update if exists
-        )
-        logger.info(f"Game state saved for group {chat_id}.")
+        try:
+            # Remove timer_task before saving, as it's not JSON serializable
+            # We recreate it on load if necessary, or let auto-end handle it
+            temp_game_state = active_games[chat_id].copy()
+            if "timer_task" in temp_game_state:
+                del temp_game_state["timer_task"]
+
+            game_states_collection.update_one(
+                {"_id": chat_id}, # Use chat_id as the unique ID for the game state
+                {"$set": temp_game_state},
+                upsert=True # Create if not exists, update if exists
+            )
+            logger.info(f"Game state saved for group {chat_id}.")
+        except Exception as e:
+            logger.error(f"Error saving game state for group {chat_id}: {e}")
 
 async def load_game_state_from_db():
     global active_games
     if game_states_collection is None:
-        logger.error("game_states_collection not initialized.")
+        logger.error("game_states_collection not initialized. Cannot load game state.")
         return
-    active_games = {doc["_id"]: doc for doc in game_states_collection.find()}
-    logger.info(f"Loaded {len(active_games)} active games from DB.")
+    try:
+        active_games = {doc["_id"]: doc for doc in game_states_collection.find()}
+        # Re-initialize timer tasks if necessary for long-running games after restart
+        for chat_id, game_state in active_games.items():
+            if game_state.get("status") == "in_progress":
+                # For simplicity, if a timer was active, restart the auto-end timer
+                # More complex games like WordChain might need to re-evaluate their turn timers
+                game_state["timer_task"] = asyncio.create_task(
+                    auto_end_game_timer(chat_id, telegram_app._bot) # Use telegram_app._bot directly
+                )
+                logger.info(f"Restarted auto-end timer for active game in group {chat_id} on load.")
+
+        logger.info(f"Loaded {len(active_games)} active games from DB.")
+    except Exception as e:
+        logger.error(f"Error loading game states from DB: {e}")
 
 
 # --- Command Handlers ---
@@ -166,18 +204,19 @@ async def start_command(update: Update, context: Application.bot):
             
             groups_collection.update_one(
                 {"_id": chat.id},
-                {"$set": {"name": chat.title, "active": True}},
+                {"$set": {"name": chat.title, "active": True, "last_seen": datetime.utcnow()}},
                 upsert=True
             )
 
     if log_message and LOG_CHANNEL_ID:
         try:
+            # Use context.bot (Update.effective_chat.bot is more robust in handlers)
             await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=log_message, parse_mode="Markdown")
             logger.info(f"Sent log message to channel {LOG_CHANNEL_ID}.")
         except Exception as e:
             logger.error(f"Failed to send log message to channel {LOG_CHANNEL_ID}: {e}")
 
-async def games_command(update: Update, context):
+async def games_command(update: Update, context: Application.bot):
     keyboard = []
     for game_name, game_callback_data in GAMES_LIST:
         keyboard.append([InlineKeyboardButton(game_name, callback_data=f"show_rules_{game_callback_data}")])
@@ -185,7 +224,7 @@ async def games_command(update: Update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Kaun sa game khelna chahte ho?", reply_markup=reply_markup)
 
-async def broadcast_command(update: Update, context):
+async def broadcast_command(update: Update, context: Application.bot):
     if update.effective_user.id != ADMIN_USER_ID:
         await update.message.reply_text("Tum is command ko use nahi kar sakte.")
         return
@@ -200,10 +239,12 @@ async def broadcast_command(update: Update, context):
     failed_count = 0
     
     if groups_collection:
+        # Use find() to iterate, not find_one()
         all_groups = groups_collection.find({"active": True})
         
         for group in all_groups:
             try:
+                # Use context.bot for sending message inside handler
                 await context.bot.send_message(chat_id=group["_id"], text=message_content)
                 sent_count += 1
                 await asyncio.sleep(0.1) # Small delay to avoid hitting Telegram API limits
@@ -218,7 +259,7 @@ async def broadcast_command(update: Update, context):
 
     await update.message.reply_text(f"Broadcast complete. Sent to {sent_count} groups, {failed_count} failed.")
 
-async def endgame_command(update: Update, context):
+async def endgame_command(update: Update, context: Application.bot):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
@@ -240,7 +281,7 @@ async def endgame_command(update: Update, context):
     else:
         await update.message.reply_text("Iss group mein koi active game nahi hai.")
 
-async def leaderboard_command(update: Update, context):
+async def leaderboard_command(update: Update, context: Application.bot):
     # Determine if it's a group or private chat for group-specific leaderboard
     group_id = update.effective_chat.id if update.effective_chat.type in ["group", "supergroup"] else None
     
@@ -250,6 +291,7 @@ async def leaderboard_command(update: Update, context):
             group_lb_text = "**Iss Group Ke Top Khiladi:**\n"
             for i, user_data in enumerate(group_leaders):
                 # Ensure group_scores key exists and retrieve the score for the current group
+                # Convert group_id to string for dictionary key lookup
                 score = user_data.get('group_scores', {}).get(str(group_id), 0)
                 group_lb_text += f"{i+1}. {user_data.get('username', 'Unknown')} - {score} points\n"
         else:
@@ -266,7 +308,7 @@ async def leaderboard_command(update: Update, context):
         world_lb_text = "\n\n**Worldwide abhi koi score nahi.**"
     await update.message.reply_text(world_lb_text, parse_mode="Markdown")
 
-async def mystats_command(update: Update, context):
+async def mystats_command(update: Update, context: Application.bot):
     user_id = update.effective_user.id
     if users_collection:
         user_data = users_collection.find_one({"user_id": user_id})
@@ -283,16 +325,19 @@ async def mystats_command(update: Update, context):
             stats_text += "\n**Group-wise Scores:**\n"
             for group_id_str, score in user_data['group_scores'].items():
                 # Fetch group name from groups_collection
-                group_info = groups_collection.find_one({"_id": int(group_id_str)})
-                group_name = group_info.get("name", f"Group ID: {group_id_str}") if group_info else f"Group ID: {group_id_str}"
-                stats_text += f"- {group_name}: {score} points\n"
+                try:
+                    group_info = groups_collection.find_one({"_id": int(group_id_str)})
+                    group_name = group_info.get("name", f"Group ID: {group_id_str}") if group_info else f"Group ID: {group_id_str}"
+                    stats_text += f"- {group_name}: {score} points\n"
+                except ValueError: # In case group_id_str is not a valid int
+                    stats_text += f"- Invalid Group ID ({group_id_str}): {score} points\n"
         
         await update.message.reply_text(stats_text, parse_mode="Markdown")
     else:
         await update.message.reply_text("Tumne abhi tak koi game nahi khela hai ya tumhara data nahi mila.")
 
 # --- Callback Query Handlers ---
-async def button_handler(update: Update, context):
+async def button_handler(update: Update, context: Application.bot):
     query = update.callback_query
     await query.answer() # Always answer the callback query to remove loading state
     chat_id = query.message.chat_id
@@ -341,6 +386,7 @@ async def button_handler(update: Update, context):
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{chat_id}")]]))
         
         # Start a countdown for the game
+        # `context.bot` works in handlers, for outside or global access use `telegram_app._bot`
         active_games[chat_id]["timer_task"] = asyncio.create_task(
             start_game_countdown(chat_id, game_type_code, query.message, context.bot)
         )
@@ -360,9 +406,15 @@ async def button_handler(update: Update, context):
             
             # Update the message to show joined players
             player_list_text = "\n".join([p["username"] for p in active_games[game_id]["players"]])
-            await query.edit_message_text(f"**{next((name for name, code in GAMES_LIST if code == active_games[game_id]['game_type']), 'Game')} Shuru Ho Raha Hai!**\n\n1 minute mein game shuru hoga. Judne ke liye 'Mein Khelunga' button dabao.\n\n**Khiladi:**\n{player_list_text}",
-                                          parse_mode="Markdown",
-                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{game_id}")]]))
+            try:
+                await query.edit_message_text(f"**{next((name for name, code in GAMES_LIST if code == active_games[game_id]['game_type']), 'Game')} Shuru Ho Raha Hai!**\n\n1 minute mein game shuru hoga. Judne ke liye 'Mein Khelunga' button dabao.\n\n**Khiladi:**\n{player_list_text}",
+                                              parse_mode="Markdown",
+                                              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{game_id}")]]))
+            except Exception as e:
+                # Message might have been edited by another player, just send a new message
+                await context.bot.send_message(chat_id=game_id, text=f"{user.full_name} ne game join kar liya hai. Ab kul khiladi: {len(active_games[game_id]['players'])}",
+                                               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Mein Khelunga!", callback_data=f"join_game_{game_id}")]]))
+
             await query.answer(f"{user.first_name} ne game join kar liya hai!")
             logger.info(f"User {user.full_name} joined game in group {game_id}.")
         else:
@@ -399,30 +451,36 @@ async def start_game_countdown(chat_id: int, game_type_code: str, message_to_edi
         elif game_type_code == "number_guessing":
             await start_number_guessing_game(chat_id, bot_instance)
     
-    # Start auto-end timer for general inactivity
-    active_games[chat_id]["timer_task"] = asyncio.create_task(auto_end_game_timer(chat_id, bot_instance))
+    # Start auto-end timer for general inactivity after initial game start
+    if chat_id in active_games: # Ensure game is still active before starting auto-end timer
+        active_games[chat_id]["timer_task"] = asyncio.create_task(auto_end_game_timer(chat_id, bot_instance))
+
 
 async def auto_end_game_timer(chat_id: int, bot_instance: Application.bot):
-    game_state = active_games.get(chat_id)
-    if not game_state:
-        return # Game might have ended already
+    # This timer should run in a loop to periodically check inactivity
+    while chat_id in active_games and active_games[chat_id]["status"] == "in_progress":
+        game_state = active_games.get(chat_id)
+        if not game_state:
+            break # Game might have ended elsewhere
 
-    last_activity = game_state.get("last_activity_time", datetime.utcnow())
-    time_since_last_activity = (datetime.utcnow() - last_activity).total_seconds()
+        last_activity = game_state.get("last_activity_time", datetime.utcnow())
+        time_since_last_activity = (datetime.utcnow() - last_activity).total_seconds()
 
-    # If less than 5 minutes since last activity, wait for remaining time
-    if time_since_last_activity < 300: # 300 seconds = 5 minutes
-        await asyncio.sleep(300 - time_since_last_activity)
-        # After sleeping, re-check (in case of new activity during sleep)
-        return await auto_end_game_timer(chat_id, bot_instance) 
+        # Check for inactivity threshold (e.g., 5 minutes = 300 seconds)
+        if time_since_last_activity >= 300: 
+            await bot_instance.send_message(chat_id=chat_id, text="Game mein 5 minute se koi activity nahi. Game khatam kar diya gaya.")
+            # Clean up game state
+            del active_games[chat_id]
+            if game_states_collection:
+                game_states_collection.delete_one({"_id": chat_id})
+            logger.info(f"Game auto-ended due to inactivity in group {chat_id}.")
+            break # Exit the loop as game is ended
+        
+        # If active, sleep for a shorter interval (e.g., 30 seconds) and recheck
+        await asyncio.sleep(30) 
+    
+    logger.info(f"Auto-end timer for group {chat_id} stopped.")
 
-    # If still active after 5 minutes of inactivity, end the game
-    if chat_id in active_games and active_games[chat_id]["status"] == "in_progress":
-        await bot_instance.send_message(chat_id=chat_id, text="Game mein 5 minute se koi activity nahi. Game khatam kar diya gaya.")
-        del active_games[chat_id]
-        if game_states_collection:
-            game_states_collection.delete_one({"_id": chat_id})
-        logger.info(f"Game auto-ended due to inactivity in group {chat_id}.")
 
 quiz_questions_cache = {} # Cache for quiz questions per chat to avoid refetching
 
@@ -445,58 +503,68 @@ async def start_quiz_game(chat_id: int, bot_instance: Application.bot):
     active_games[chat_id]["last_activity_time"] = datetime.utcnow() # Reset activity timer
     await save_game_state_to_db(chat_id)
 
-    await send_next_quiz_question(chat_id, bot_instance)
+    # Start the quiz round by sending the first question
+    active_games[chat_id]["timer_task"] = asyncio.create_task(
+        send_next_quiz_question_with_timer(chat_id, bot_instance)
+    )
 
-async def send_next_quiz_question(chat_id: int, bot_instance: Application.bot):
-    game_state = active_games.get(chat_id)
-    if not game_state or game_state["status"] != "in_progress" or game_state["game_type"] != "quiz":
-        return
+async def send_next_quiz_question_with_timer(chat_id: int, bot_instance: Application.bot):
+    while chat_id in active_games and active_games[chat_id]["status"] == "in_progress" and active_games[chat_id]["game_type"] == "quiz":
+        game_state = active_games.get(chat_id)
+        if not game_state:
+            break # Game ended
+        
+        if game_state["current_round"] >= len(game_state["quiz_data"]):
+            await bot_instance.send_message(chat_id=chat_id, text="Quiz khatam! Sabhi sawal pooche ja chuke hain.")
+            del active_games[chat_id]
+            if game_states_collection:
+                game_states_collection.delete_one({"_id": chat_id})
+            logger.info(f"Quiz game ended in group {chat_id}: all questions asked.")
+            break # Exit loop
+        
+        question_data = game_state["quiz_data"][game_state["current_round"]]
+        
+        if "options" in question_data and question_data["options"]:
+            # Send as a poll if options are provided
+            message = await bot_instance.send_poll(
+                chat_id=chat_id,
+                question=question_data["text"],
+                options=question_data["options"],
+                is_anonymous=False, # Make poll non-anonymous so we can track user answers
+                type='quiz', # Specific quiz poll type
+                correct_option_id=question_data["correct_option_id"],
+                explanation=question_data.get("explanation", ""),
+                open_period=20 # Poll will be open for 20 seconds
+            )
+            game_state["current_question"] = {
+                "type": "poll",
+                "message_id": message.message_id,
+                "poll_id": message.poll.id,
+                "correct_answer_text": question_data["options"][question_data["correct_option_id"]], # Store correct answer for logging/reference
+                "correct_option_id": question_data["correct_option_id"]
+            }
+        else:
+            # Send as a text question if no options (direct answer expected)
+            await bot_instance.send_message(chat_id=chat_id, text=f"**Sawal {game_state['current_round'] + 1}:**\n\n{question_data['text']}", parse_mode="Markdown")
+            game_state["current_question"] = {
+                "type": "text",
+                "correct_answer": question_data["answer"].lower() # Store correct answer (lowercase for comparison)
+            }
+        
+        game_state["answered_this_round"] = False # Reset for the new question
+        game_state["last_activity_time"] = datetime.utcnow() # Update activity time
+        await save_game_state_to_db(chat_id)
 
-    if game_state["current_round"] >= len(game_state["quiz_data"]):
-        await bot_instance.send_message(chat_id=chat_id, text="Quiz khatam! Sabhi sawal pooche ja chuke hain.")
-        del active_games[chat_id]
-        if game_states_collection:
-            game_states_collection.delete_one({"_id": chat_id})
-        logger.info(f"Quiz game ended in group {chat_id}: all questions asked.")
-        return
+        await asyncio.sleep(20) # Wait for 20 seconds for answers
+        
+        # After timer, check if answered (for text questions). For polls, Telegram closes them automatically.
+        if game_state["current_question"].get("type") == "text" and not game_state["answered_this_round"]:
+            await bot_instance.send_message(chat_id=chat_id, text=f"Samay samapt! Sahi jawab tha: **{game_state['current_question']['correct_answer'].upper()}**")
 
-    question_data = game_state["quiz_data"][game_state["current_round"]]
-    
-    if "options" in question_data and question_data["options"]:
-        # Send as a poll if options are provided
-        message = await bot_instance.send_poll(
-            chat_id=chat_id,
-            question=question_data["text"],
-            options=question_data["options"],
-            is_anonymous=False, # Make poll non-anonymous so we can track user answers
-            type='quiz', # Specific quiz poll type
-            correct_option_id=question_data["correct_option_id"],
-            explanation=question_data.get("explanation", ""),
-            open_period=20 # Poll will be open for 20 seconds
-        )
-        game_state["current_question"] = {
-            "type": "poll",
-            "message_id": message.message_id,
-            "poll_id": message.poll.id,
-            "correct_answer": question_data["options"][question_data["correct_option_id"]], # Store correct answer for logging/reference
-            "correct_option_id": question_data["correct_option_id"]
-        }
-    else:
-        # Send as a text question if no options (direct answer expected)
-        await bot_instance.send_message(chat_id=chat_id, text=f"**Sawal {game_state['current_round'] + 1}:**\n\n{question_data['text']}", parse_mode="Markdown")
-        game_state["current_question"] = {
-            "type": "text",
-            "correct_answer": question_data["answer"].lower() # Store correct answer (lowercase for comparison)
-        }
-    
-    game_state["answered_this_round"] = False # Reset for the new question
-    game_state["last_activity_time"] = datetime.utcnow() # Update activity time
-    await save_game_state_to_db(chat_id)
+        game_state["current_round"] += 1
+        # Loop continues to next question or breaks if game is over
+    logger.info(f"Quiz question sending loop ended for group {chat_id}.")
 
-    # Schedule next question after a delay (e.g., 20 seconds)
-    await asyncio.sleep(20) 
-    game_state["current_round"] += 1
-    await send_next_quiz_question(chat_id, bot_instance)
 
 async def handle_quiz_answer(update: Update, context: Application.bot):
     chat_id = update.effective_chat.id
@@ -508,11 +576,13 @@ async def handle_quiz_answer(update: Update, context: Application.bot):
     # Only allow answers from players who joined the game
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return 
-    # Prevent multiple correct answers for a single text-based question round
-    if game_state["answered_this_round"]:
-        return 
     # This handler is for TEXT answers, not for POLL answers
     if game_state["current_question"].get("type") == "poll":
+        return 
+
+    # Prevent multiple correct answers for a single text-based question round
+    if game_state["answered_this_round"]:
+        await update.message.reply_text("Iss sawal ka jawab pehle hi diya ja chuka hai.", reply_to_message_id=update.message.message_id)
         return 
 
     current_q = game_state["current_question"]
@@ -525,6 +595,8 @@ async def handle_quiz_answer(update: Update, context: Application.bot):
         game_state["last_activity_time"] = datetime.utcnow() # Update activity time
         await save_game_state_to_db(chat_id)
         logger.info(f"Quiz: User {user.full_name} gave correct answer in group {chat_id}.")
+        # No explicit call to send_next_quiz_question_with_timer here, as it's handled by its own timer loop.
+        # This only processes the current answer.
 
 async def handle_poll_answer(update: Update, context: Application.bot):
     poll_answer = update.poll_answer
@@ -539,15 +611,16 @@ async def handle_poll_answer(update: Update, context: Application.bot):
                 
                 # Ensure the user is a player in this game
                 if user_id not in [p["user_id"] for p in game_state["players"]]:
-                    logger.info(f"Poll answer from non-player {user_name}.")
+                    logger.info(f"Poll answer from non-player {user_name} in group {chat_id}.")
                     return
 
-                # Prevent multiple correct answers for a single poll round (though Telegram handles this mostly)
-                if game_state["answered_this_round"]:
-                    logger.info(f"Poll: Already answered this round in group {chat_id}.")
-                    return
+                # Check if this user already answered correctly for this poll (optional, Telegram usually handles this for polls)
+                if game_state["answered_this_round"]: # If someone already answered correctly
+                     logger.info(f"Poll: Already answered this round in group {chat_id}.")
+                     return
                 
                 correct_option_id = current_q.get("correct_option_id")
+                # Check if the selected option is the correct one
                 if correct_option_id is not None and correct_option_id in poll_answer.option_ids:
                     await context.bot.send_message(chat_id=chat_id, text=f"Sahi jawab, {user_name}! Tumhe 10 points mile.")
                     await update_user_score(user_id, user_name, chat_id, 10)
@@ -555,8 +628,11 @@ async def handle_poll_answer(update: Update, context: Application.bot):
                     game_state["last_activity_time"] = datetime.utcnow()
                     await save_game_state_to_db(chat_id)
                     logger.info(f"Quiz Poll: User {user_name} gave correct answer in group {chat_id}.")
-                break
+                else:
+                    await context.bot.send_message(chat_id=chat_id, text=f"Galat jawab, {user_name}!")
+                    logger.info(f"Quiz Poll: User {user_name} gave wrong answer in group {chat_id}.")
 
+                break # Found the game, exit loop
 
 async def start_wordchain_game(chat_id: int, bot_instance: Application.bot):
     words_data = await get_channel_content("wordchain")
@@ -582,7 +658,11 @@ async def start_wordchain_game(chat_id: int, bot_instance: Application.bot):
         del active_games[chat_id]
         if game_states_collection:
             game_states_collection.delete_one({"_id": chat_id})
+        logger.info(f"Word Chain game ended in {chat_id}: no players after join.")
         return
+
+    # Shuffle players to randomize starting turn
+    random.shuffle(active_games[chat_id]["players"])
 
     current_player = active_games[chat_id]["players"][active_games[chat_id]["turn_index"]]
 
@@ -592,7 +672,7 @@ async def start_wordchain_game(chat_id: int, bot_instance: Application.bot):
     )
     # Start the turn timer for the first player
     active_games[chat_id]["timer_task"] = asyncio.create_task(
-        turn_timer(chat_id, 60, bot_instance) # 60 seconds per turn
+        turn_timer(chat_id, 60, bot_instance, "wordchain") # 60 seconds per turn
     )
     logger.info(f"WordChain game started in group {chat_id}. First word: {start_word}")
 
@@ -604,6 +684,11 @@ async def handle_wordchain_answer(update: Update, context: Application.bot):
     if not game_state or game_state["game_type"] != "wordchain" or game_state["status"] != "in_progress":
         return
     
+    # Ensure game has players
+    if not game_state["players"]:
+        logger.warning(f"WordChain: No players found in game state for {chat_id}.")
+        return
+
     current_player = game_state["players"][game_state["turn_index"]]
     # Ensure it's the current player's turn
     if user.id != current_player["user_id"]:
@@ -613,7 +698,7 @@ async def handle_wordchain_answer(update: Update, context: Application.bot):
     user_word = update.message.text.strip().lower()
     last_char_of_prev_word = game_state["current_word"][-1].lower()
 
-    if user_word.startswith(last_char_of_prev_word) and len(user_word) > 1: # Simple check for valid word
+    if user_word.startswith(last_char_of_prev_word) and len(user_word) > 1 and user_word.isalpha(): # Simple check for valid word
         # Correct answer
         await update_user_score(user.id, user.full_name, chat_id, 5)
         await update.message.reply_text(f"Sahi! '{user_word.upper()}' ab naya shabd hai. {user.first_name} ko 5 points mile.", reply_to_message_id=update.message.message_id)
@@ -632,14 +717,16 @@ async def handle_wordchain_answer(update: Update, context: Application.bot):
             chat_id=chat_id,
             text=f"{next_player['username']} ki baari. '{user_word[-1].upper()}' se shuru hone wala shabd batao."
         )
-        game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, 60, context.bot))
+        game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, 60, context.bot, "wordchain"))
         logger.info(f"WordChain: User {user.full_name} gave correct word '{user_word}' in group {chat_id}.")
 
     else:
         # Incorrect answer - player is eliminated
-        await update.message.reply_text(f"Galat shabd! '{last_char_of_prev_word.upper()}' se shuru hona chahiye tha. Ya shabd valid nahi hai. {user.first_name} game se bahar ho gaya.", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text(f"Galat shabd! '{last_char_of_prev_word.upper()}' se shuru hona chahiye tha ya shabd valid nahi hai. {user.first_name} game se bahar ho gaya.", reply_to_message_id=update.message.message_id)
         
-        game_state["players"].pop(game_state["turn_index"]) # Remove player
+        # Remove player from the list
+        game_state["players"] = [p for p in game_state["players"] if p["user_id"] != user.id]
+        
         game_state["last_activity_time"] = datetime.utcnow() 
         await save_game_state_to_db(chat_id)
 
@@ -654,43 +741,70 @@ async def handle_wordchain_answer(update: Update, context: Application.bot):
             logger.info(f"WordChain game ended in {chat_id}: not enough players.")
         else:
             # Adjust turn_index if player was removed (to ensure it stays within bounds)
-            game_state["turn_index"] %= len(game_state["players"])
+            # If the current turn_index is now out of bounds, reset it to 0
+            if game_state["turn_index"] >= len(game_state["players"]):
+                game_state["turn_index"] = 0
+            
             next_player = game_state["players"][game_state["turn_index"]]
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"{next_player['username']} ki baari. '{game_state['current_word'][-1].upper()}' se shuru hone wala shabd batao."
             )
-            game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, 60, context.bot))
+            game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, 60, context.bot, "wordchain"))
             logger.info(f"WordChain: User {user.full_name} failed. Next turn for {next_player['username']} in group {chat_id}.")
 
-async def turn_timer(chat_id: int, duration: int, bot_instance: Application.bot):
+async def turn_timer(chat_id: int, duration: int, bot_instance: Application.bot, game_type: str):
     await asyncio.sleep(duration)
     
     game_state = active_games.get(chat_id)
-    # Check if game is still active and it's a wordchain game
-    if game_state and game_state["status"] == "in_progress" and game_state["game_type"] == "wordchain":
-        current_player = game_state["players"][game_state["turn_index"]]
-        await bot_instance.send_message(chat_id=chat_id, text=f"{current_player['username']} ne jawab nahi diya! Woh game se bahar.")
+    # Check if game is still active and of the correct type
+    if game_state and game_state["status"] == "in_progress" and game_state["game_type"] == game_type:
         
-        game_state["players"].pop(game_state["turn_index"]) # Remove timed-out player
-        game_state["last_activity_time"] = datetime.utcnow() 
-        await save_game_state_to_db(chat_id)
+        if game_type == "wordchain":
+            if not game_state["players"]:
+                logger.warning(f"WordChain: No players found for timer in group {chat_id}.")
+                return # Should have been handled by game end, but a safety check
 
-        if len(game_state["players"]) < 2:
-            await bot_instance.send_message(chat_id=chat_id, text="Khel khatam! Sirf ek khiladi bacha hai ya koi nahi bacha.")
-            del active_games[chat_id]
-            if game_states_collection:
-                game_states_collection.delete_one({"_id": chat_id})
-            logger.info(f"WordChain game ended in {chat_id} due to timeout: not enough players.")
-        else:
-            game_state["turn_index"] %= len(game_state["players"]) # Adjust index
-            next_player = game_state["players"][game_state["turn_index"]]
-            await bot_instance.send_message(
-                chat_id=chat_id,
-                text=f"{next_player['username']} ki baari. '{game_state['current_word'][-1].upper()}' se shuru hone wala shabd batao."
-            )
-            game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, duration, bot_instance)) # Start new timer
-            logger.info(f"WordChain: {current_player['username']} timed out. Next turn for {next_player['username']} in group {chat_id}.")
+            current_player = game_state["players"][game_state["turn_index"]]
+            await bot_instance.send_message(chat_id=chat_id, text=f"{current_player['username']} ne jawab nahi diya! Woh game se bahar.")
+            
+            # Remove timed-out player
+            game_state["players"].pop(game_state["turn_index"]) 
+            game_state["last_activity_time"] = datetime.utcnow() 
+            await save_game_state_to_db(chat_id)
+
+            if len(game_state["players"]) < 2:
+                await bot_instance.send_message(chat_id=chat_id, text="Khel khatam! Sirf ek khiladi bacha hai ya koi nahi bacha.")
+                del active_games[chat_id]
+                if game_states_collection:
+                    game_states_collection.delete_one({"_id": chat_id})
+                logger.info(f"WordChain game ended in {chat_id} due to timeout: not enough players.")
+            else:
+                # Adjust index if player was removed
+                if game_state["turn_index"] >= len(game_state["players"]):
+                    game_state["turn_index"] = 0 # Loop back to start if necessary
+                next_player = game_state["players"][game_state["turn_index"]]
+                await bot_instance.send_message(
+                    chat_id=chat_id,
+                    text=f"{next_player['username']} ki baari. '{game_state['current_word'][-1].upper()}' se shuru hone wala shabd batao."
+                )
+                # Start new timer for the next player's turn
+                game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, duration, bot_instance, "wordchain"))
+                logger.info(f"WordChain: {current_player['username']} timed out. Next turn for {next_player['username']} in group {chat_id}.")
+        
+        elif game_type == "guessing":
+             # This timer is for the entire guessing round, if not guessed
+            if not game_state["guessed_this_round"]:
+                correct_answer = game_state["current_guess_item"]["answer"]
+                await bot_instance.send_message(chat_id=chat_id, text=f"Samay samapt! Sahi jawab tha: **{correct_answer.upper()}**.")
+            
+            game_state["current_round"] += 1
+            game_state["last_activity_time"] = datetime.utcnow() 
+            await save_game_state_to_db(chat_id)
+            # Move to next round
+            active_games[chat_id]["timer_task"] = asyncio.create_task(send_next_guess_item(chat_id, bot_instance)) # This handles next round or game end
+            logger.info(f"Guessing game round timed out in {chat_id}. Moving to next round.")
+
 
 async def start_guessing_game(chat_id: int, bot_instance: Application.bot):
     guesses = await get_channel_content("guessing")
@@ -710,7 +824,7 @@ async def start_guessing_game(chat_id: int, bot_instance: Application.bot):
     active_games[chat_id]["last_activity_time"] = datetime.utcnow() 
     await save_game_state_to_db(chat_id)
 
-    await send_next_guess_item(chat_id, bot_instance)
+    active_games[chat_id]["timer_task"] = asyncio.create_task(send_next_guess_item(chat_id, bot_instance))
 
 async def send_next_guess_item(chat_id: int, bot_instance: Application.bot):
     game_state = active_games.get(chat_id)
@@ -735,28 +849,17 @@ async def send_next_guess_item(chat_id: int, bot_instance: Application.bot):
         "answer": guess_item["answer"].lower()
     }
     game_state["guessed_this_round"] = False # Reset for new round
-    game_state["attempts"] = {p["user_id"]: 0 for p in game_state["players"]} # Reset attempts for new round
+    # Initialize attempts for all current players
+    game_state["attempts"] = {str(p["user_id"]): 0 for p in game_state["players"]} 
     game_state["last_activity_time"] = datetime.utcnow() 
     await save_game_state_to_db(chat_id)
 
     # Start a timer for this guessing round
     if game_state.get("timer_task"):
         game_state["timer_task"].cancel()
-    game_state["timer_task"] = asyncio.create_task(guessing_round_timer(chat_id, 60, bot_instance)) # 60 seconds per round
+    # The `turn_timer` is now a generic timer that takes game_type
+    game_state["timer_task"] = asyncio.create_task(turn_timer(chat_id, 60, bot_instance, "guessing")) # 60 seconds per round
     logger.info(f"Guessing game: new round {game_state['current_round']+1} started in {chat_id}.")
-
-async def guessing_round_timer(chat_id: int, duration: int, bot_instance: Application.bot):
-    await asyncio.sleep(duration)
-    game_state = active_games.get(chat_id)
-    # If the round hasn't been guessed yet and game is still active
-    if game_state and game_state["status"] == "in_progress" and game_state["game_type"] == "guessing" and not game_state["guessed_this_round"]:
-        correct_answer = game_state["current_guess_item"]["answer"]
-        await bot_instance.send_message(chat_id=chat_id, text=f"Samay samapt! Sahi jawab tha: **{correct_answer.upper()}**.")
-        game_state["current_round"] += 1
-        game_state["last_activity_time"] = datetime.utcnow() 
-        await save_game_state_to_db(chat_id)
-        await send_next_guess_item(chat_id, bot_instance) # Move to next round
-        logger.info(f"Guessing game round timed out in {chat_id}. Moving to next round.")
 
 async def handle_guessing_answer(update: Update, context: Application.bot):
     chat_id = update.effective_chat.id
@@ -784,14 +887,18 @@ async def handle_guessing_answer(update: Update, context: Application.bot):
         game_state["current_round"] += 1 # Move to next round
         game_state["last_activity_time"] = datetime.utcnow() 
         await save_game_state_to_db(chat_id)
-        await send_next_guess_item(chat_id, context.bot)
+        # Manually trigger next item, timer would have done it if not guessed
+        active_games[chat_id]["timer_task"] = asyncio.create_task(send_next_guess_item(chat_id, context.bot))
         logger.info(f"Guessing game: User {user.full_name} guessed correctly in {chat_id}.")
     else:
         # Incorrect guess
-        game_state["attempts"][user.id] = game_state["attempts"].get(user.id, 0) + 1 # Increment attempts
+        # Convert user.id to string for dictionary key consistency
+        user_id_str = str(user.id)
+        game_state["attempts"][user_id_str] = game_state["attempts"].get(user_id_str, 0) + 1 # Increment attempts
         await update.message.reply_text("Galat guess. Phir se koshish karo!", reply_to_message_id=update.message.message_id)
+        game_state["last_activity_time"] = datetime.utcnow()
         await save_game_state_to_db(chat_id) # Save updated attempts
-        logger.info(f"Guessing game: User {user.full_name} made wrong guess in {chat_id}.")
+        logger.info(f"Guessing game: User {user.full_name} made wrong guess in {chat_id}. Attempts: {game_state['attempts'][user_id_str]}.")
 
 async def start_number_guessing_game(chat_id: int, bot_instance: Application.bot):
     secret_number = random.randint(1, 100) # Choose a random number between 1 and 100
@@ -820,6 +927,9 @@ async def handle_number_guess(update: Update, context: Application.bot):
 
     try:
         user_guess = int(update.message.text)
+        if not (1 <= user_guess <= 100):
+            await update.message.reply_text("Kripya 1 se 100 ke beech ek number type karein.", reply_to_message_id=update.message.message_id)
+            return
     except ValueError:
         await update.message.reply_text("Kripya ek valid number type karein.", reply_to_message_id=update.message.message_id)
         return
@@ -828,12 +938,13 @@ async def handle_number_guess(update: Update, context: Application.bot):
     
     # Increment guess count for the user
     # Convert user.id to string for dictionary key consistency with MongoDB if needed later
-    game_state["guesses_made"][str(user.id)] = game_state["guesses_made"].get(str(user.id), 0) + 1 
+    user_id_str = str(user.id)
+    game_state["guesses_made"][user_id_str] = game_state["guesses_made"].get(user_id_str, 0) + 1 
     game_state["last_activity_time"] = datetime.utcnow() 
     await save_game_state_to_db(chat_id)
     
     if user_guess == secret_number:
-        guesses_count = game_state["guesses_made"][str(user.id)]
+        guesses_count = game_state["guesses_made"][user_id_str]
         # Points awarded based on fewer guesses (e.g., 100 - (guesses * 5), min 10 points)
         points = 100 - (guesses_count * 5)
         points = max(10, points) # Minimum points
@@ -845,7 +956,7 @@ async def handle_number_guess(update: Update, context: Application.bot):
         del active_games[chat_id] # End the game for this chat
         if game_states_collection:
             game_states_collection.delete_one({"_id": chat_id})
-        logger.info(f"Number Guessing: User {user.full_name} won in group {chat_id}.")
+        logger.info(f"Number Guessing: User {user.full_name} won in group {chat_id}. Game ended.")
 
     elif user_guess < secret_number:
         await update.message.reply_text("Mera number isse **bada** hai.", reply_to_message_id=update.message.message_id)
@@ -876,17 +987,24 @@ async def initialize_telegram_bot_application():
     """Telegram Bot Application को initialize और configure करता है।"""
     logger.info("Initializing Telegram Bot Application...")
     
+    # BOT_TOKEN और MONGO_URI की जाँच करें
+    if not BOT_TOKEN:
+        logger.critical("CRITICAL ERROR: BOT_TOKEN environment variable not set. Bot cannot start.")
+        return None
+    if not MONGO_URI:
+        logger.critical("CRITICAL ERROR: MONGO_URI environment variable not set. Bot cannot start without MongoDB.")
+        return None
+
     # MongoDB collections को initialize करें
     try:
         init_mongo_collections()
     except Exception as e:
         logger.critical(f"CRITICAL ERROR: Could not initialize MongoDB collections. Bot cannot start: {e}")
-        # MongoDB connection critical है, इसलिए बॉट को आगे बढ़ने न दें
         return None # Return None to indicate failure
 
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Application को initialize करें और डेटा लोड करें
+    # Application को initialize करें
     await application.initialize() 
     await load_game_state_from_db() # Load active game states from DB (for persistence across restarts)
 
