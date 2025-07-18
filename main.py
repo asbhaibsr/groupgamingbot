@@ -1,101 +1,93 @@
 # main.py
 
-import multiprocessing # multiprocessing module import karein
+from flask import Flask, jsonify
+import threading
+import asyncio
 import logging
 import os
-# asyncio को यहाँ इम्पोर्ट करने की ज़रूरत नहीं है अगर आप इसे सीधे main process में इस्तेमाल नहीं कर रहे हैं।
-# लेकिन अगर आपके run_telegram_bot_process फंक्शन में asyncio.run() है, तो bot.py को
-# asyncio इम्पोर्ट करना होगा। main.py में सीधे इसकी आवश्यकता नहीं है,
-# लेकिन clarity के लिए इसे रहने दिया जा सकता है।
-import time # time.sleep का उपयोग करने के लिए
+import sys
 
-from dotenv import load_dotenv
+# bot.py से फंक्शन इंपोर्ट करें
+# सुनिश्चित करें कि bot.py इस main.py के समान डायरेक्टरी में है
+try:
+    from bot import initialize_telegram_bot_application, logger
+except ImportError:
+    print("Error: bot.py not found or has import errors. Please ensure bot.py is in the same directory.")
+    sys.exit(1)
 
-# Local files import karna
-# सुनिश्चित करें कि 'bot.py' में 'run_bot' async function है
-# और 'server.py' में 'run_server' synchronous function है
-from bot import run_bot
-from server import run_server
+# Flask app initialization
+app = Flask(__name__)
 
-# Environment variables ko load karna
-load_dotenv()
+# Flask server के लिए logging level set करें (optional)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.INFO)
 
-# Main logger setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Telegram Bot application instance को स्टोर करने के लिए ग्लोबल वेरिएबल
+telegram_app = None
 
-# Flask server ko alag process mein chalane ke liye function
-def run_flask_process():
-    """Flask server ko ek alag process mein run karta hai."""
-    logger.info("Starting Flask server in a separate process...")
+# --- Flask Routes ---
+@app.route('/')
+def home():
+    """Simple home endpoint."""
+    return "Hello! Telegram Bot aur Flask server chal rahe hain."
+
+@app.route('/healthz')
+def health_check():
+    """Health check endpoint jo server aur bot ki status batata hai."""
+    bot_status = telegram_app is not None and telegram_app.running
+    return jsonify({"status": "healthy", "bot_running": bot_status}), 200
+
+# --- Telegram Bot Startup in a separate Thread ---
+async def run_telegram_bot_polling_async():
+    """Async function to run the Telegram Bot polling."""
+    global telegram_app
     try:
-        run_server() # server.py mein run_server ek synchronous function hai
+        telegram_app = await initialize_telegram_bot_application()
+        if telegram_app:
+            await telegram_app.run_polling()
+            logger.info("Telegram Bot Polling stopped.")
+        else:
+            logger.error("Telegram Bot Application failed to initialize.")
     except Exception as e:
-        logger.critical(f"Flask server failed to start: {e}")
-        os._exit(1) # Process ko exit kar de, poore application ko nahi
+        logger.error(f"Error running Telegram Bot Polling: {e}")
 
-# Telegram Bot ko alag process mein chalane ke liye function
-def run_telegram_bot_process():
-    """Telegram Bot ko ek alag process mein run karta hai."""
-    logger.info("Starting Telegram Bot in a separate process...")
+def start_bot_in_thread():
+    """Wrapper function to start the Telegram Bot in a new thread."""
+    # New event loop for the new thread
     try:
-        # यहाँ asyncio को इम्पोर्ट किया जाता है और run_bot को चलाया जाता है।
-        # यह सुनिश्चित करता है कि Telegram bot एक नए, स्वतंत्र asyncio इवेंट लूप में चले।
-        import asyncio
-        asyncio.run(run_bot())
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        new_loop.run_until_complete(run_telegram_bot_polling_async())
     except Exception as e:
-        logger.critical(f"Telegram Bot failed to run: {e}")
-        os._exit(1) # Process ko exit kar de, poore application ko nahi
+        logger.error(f"Error starting Telegram Bot thread: {e}")
 
-if __name__ == "__main__":
-    # यह ब्लॉक सुनिश्चित करता है कि कोड केवल तभी चले जब स्क्रिप्ट को सीधे चलाया जाए
-    # न कि जब इसे किसी और मॉड्यूल में इम्पोर्ट किया जाए।
-    # Multiprocessing के लिए यह ज़रूरी है।
-
-    logger.info("Application starting...")
-
-    # Flask server process start karein
-    flask_process = multiprocessing.Process(target=run_flask_process)
-    # daemon=True सेट करने से parent process बंद होने पर child process भी बंद हो जाएगा।
-    # Production environments में आप इसे manage करना चाह सकते हैं।
-    flask_process.daemon = True
-    flask_process.start()
-    logger.info("Flask server process started.")
-
-    # Telegram Bot process start karein
-    telegram_bot_process = multiprocessing.Process(target=run_telegram_bot_process)
-    telegram_bot_process.daemon = True
-    telegram_bot_process.start()
-    logger.info("Telegram Bot process started.")
-
+# --- Main entry point ---
+if __name__ == '__main__':
+    # Environment variables set karein (या .env से लोड करें)
+    # यह सुनिश्चित करने के लिए कि bot.py भी उन्हें एक्सेस कर सके
+    # अगर आप docker-compose या kubernetes में डिप्लॉय कर रहे हैं, तो ये environment variables
+    # कंटेनर के startup पर ही सेट होंगे, आपको यहां load_dotenv() की आवश्यकता नहीं होगी।
+    # For local development without docker-compose:
     try:
-        # Main process को जीवित रखने के लिए, हम एक infinite loop का उपयोग करते हैं
-        # जो CPU को व्यस्त नहीं करता। यह सुनिश्चित करता है कि daemon child processes चलते रहें।
-        logger.info("Main application loop running. Press Ctrl+C to stop.")
-        while True:
-            time.sleep(1) # हर सेकंड एक बार रुकेगा, CPU usage कम रखेगा
-
-    except KeyboardInterrupt:
-        logger.info("Application interrupted by user (Ctrl+C detected).")
-        # Processes को terminate करें जब user Ctrl+C दबाए
-        # terminate() एक forceful termination है, जो cleanup ठीक से नहीं कर सकता।
-        # हालांकि, daemon processes के लिए यह अक्सर स्वीकार्य होता है।
-        flask_process.terminate()
-        telegram_bot_process.terminate()
-        
-        # processes के खत्म होने का इंतज़ार करें (optional, cleanup ke liye)
-        # अगर daemon=True है, तो ये कॉल हमेशा ब्लॉक नहीं करेंगे।
-        flask_process.join()
-        telegram_bot_process.join()
-        
-        logger.info("Application processes terminated.")
-        os._exit(0) # Safely exit the main process
-
+        from dotenv import load_dotenv
+        load_dotenv() # .env file ko load karein
+        logger.info(".env file loaded.")
+    except ImportError:
+        logger.warning("python-dotenv not installed. Environment variables must be set manually.")
     except Exception as e:
-        logger.critical(f"Unhandled exception in main application loop: {e}")
-        # Processes को terminate करें अगर कोई unhandled exception हो
-        flask_process.terminate()
-        telegram_bot_process.terminate()
-        flask_process.join()
-        telegram_bot_process.join()
-        os._exit(1) # Error ke saath exit
+        logger.warning(f"Error loading .env file: {e}")
+
+
+    # Bot को एक अलग thread में shuru karein
+    bot_thread = threading.Thread(target=start_bot_in_thread, daemon=True) # daemon=True ताकी Flask बंद होने पर ये भी बंद हो जाए
+    bot_thread.start()
+    logger.info("Telegram Bot thread started.")
+
+    # Flask server shuru karein
+    logger.info("Starting Flask server...")
+    port = int(os.getenv("PORT", 8000)) # PORT environment variable से load करे
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+    # Note: `app.run()` blocking hai, isliye iske baad ka code server band hone par hi chalega.
+    logger.info("Flask server stopped. Exiting application.")
+
