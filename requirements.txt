@@ -1,4 +1,4 @@
-pyrogram # या pyrogram का कोई भी नवीनतम स्थिर वर्ज़न
+pyrogram==2.8.19 # या pyrogram का कोई भी नवीनतम स्थिर वर्ज़न
 pymongo==4.6.2
 Flask==3.0.2
 dnspython==2.6.1
