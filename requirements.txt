@@ -1,5 +1,5 @@
-python-telegram-bot
-pymongo
-Flask
-dnspython
-python-dotenv
+python-telegram-bot==20.5
+pymongo==4.6.2
+Flask==3.0.2
+dnspython==2.6.1
+python-dotenv==1.0.1
