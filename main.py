@@ -10,7 +10,7 @@ import sys
 # bot.py से फंक्शन इंपोर्ट करें
 # सुनिश्चित करें कि bot.py इस main.py के समान डायरेक्टरी में है
 try:
-    from bot import initialize_telegram_bot_application, logger
+    from bot import initialize_telegram_bot_application, logger # logger को भी इंपोर्ट करें
 except ImportError:
     print("Error: bot.py not found or has import errors. Please ensure bot.py is in the same directory.")
     sys.exit(1)
@@ -34,40 +34,47 @@ def home():
 @app.route('/healthz')
 def health_check():
     """Health check endpoint jo server aur bot ki status batata hai."""
+    # Bot application initialize हो चुकी है और चल रही है या नहीं, ये चेक करें
+    # telegram_app.running प्रॉपर्टी बताती है कि बॉट का polling/webhook लूप चल रहा है या नहीं
     bot_status = telegram_app is not None and telegram_app.running
     return jsonify({"status": "healthy", "bot_running": bot_status}), 200
 
 # --- Telegram Bot Startup in a separate Thread ---
-async def run_telegram_bot_polling_async():
-    """Async function to run the Telegram Bot polling."""
+async def run_telegram_bot_tasks():
+    """Async function to run the Telegram Bot polling and keep it alive."""
     global telegram_app
     try:
         telegram_app = await initialize_telegram_bot_application()
         if telegram_app:
-            await telegram_app.run_polling()
-            logger.info("Telegram Bot Polling stopped.")
+            # run_polling() को सीधे await करने के बजाय, start() और idle() का उपयोग करें
+            # यह threading के साथ बेहतर काम करता है क्योंकि idle() एक blocking call है
+            # जो polling को background में चलने देता है।
+            await telegram_app.start() # Bot polling शुरू करें
+            logger.info("Telegram Bot Polling started.")
+            await telegram_app.idle() # Bot को idle state में रखें, updates का इंतजार करें
+            logger.info("Telegram Bot Polling stopped (idle finished).")
+            await telegram_app.stop() # Bot को gracefully stop करें
+            logger.info("Telegram Bot Application stopped.")
         else:
-            logger.error("Telegram Bot Application failed to initialize.")
+            logger.error("Telegram Bot Application failed to initialize. Bot will not run.")
     except Exception as e:
-        logger.error(f"Error running Telegram Bot Polling: {e}")
+        logger.error(f"Error running Telegram Bot Polling tasks: {e}", exc_info=True) # exc_info=True से traceback भी दिखेगा
 
 def start_bot_in_thread():
     """Wrapper function to start the Telegram Bot in a new thread."""
     # New event loop for the new thread
+    # यह सुनिश्चित करना महत्वपूर्ण है कि प्रत्येक थ्रेड का अपना asyncio इवेंट लूप हो।
     try:
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
-        new_loop.run_until_complete(run_telegram_bot_polling_async())
+        new_loop.run_until_complete(run_telegram_bot_tasks())
     except Exception as e:
-        logger.error(f"Error starting Telegram Bot thread: {e}")
+        logger.error(f"Error setting up asyncio loop for bot thread: {e}", exc_info=True)
+
 
 # --- Main entry point ---
 if __name__ == '__main__':
-    # Environment variables set karein (या .env से लोड करें)
-    # यह सुनिश्चित करने के लिए कि bot.py भी उन्हें एक्सेस कर सके
-    # अगर आप docker-compose या kubernetes में डिप्लॉय कर रहे हैं, तो ये environment variables
-    # कंटेनर के startup पर ही सेट होंगे, आपको यहां load_dotenv() की आवश्यकता नहीं होगी।
-    # For local development without docker-compose:
+    # Environment variables load karein (जैसे .env से)
     try:
         from dotenv import load_dotenv
         load_dotenv() # .env file ko load karein
