@@ -45,7 +45,9 @@ async def run_telegram_bot_tasks():
     """Async function to run the Telegram Bot polling and keep it alive."""
     global telegram_app
     try:
+        logger.info("Initializing Telegram Bot Application...") # Added this log for clarity
         telegram_app = await initialize_telegram_bot_application()
+        
         if telegram_app:
             await telegram_app.start() # Bot polling शुरू करें
             logger.info("Telegram Bot Polling started.")
@@ -108,4 +110,3 @@ if __name__ == '__main__':
 
     # Note: `app.run()` एक blocking call है, isliye iske baad ka code server band hone par hi chalega.
     logger.info("Flask server stopped. Exiting application.")
-
