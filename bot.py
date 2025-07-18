@@ -156,16 +156,19 @@ async def load_game_state_from_db():
     try:
         active_games = {doc["_id"]: doc for doc in game_states_collection.find()}
         # Re-initialize timer tasks if necessary for long-running games after restart
+        # Note: If telegram_app._bot is not available yet, this might cause issues on initial load.
+        # This part assumes `telegram_app` and `telegram_app._bot` are available when called.
+        # A safer approach would be to pass `bot_instance` to `load_game_state_from_db`
+        # or call it after `application.build()`
+        # For now, we'll keep it as is, expecting `initialize_telegram_bot_application` to manage this.
         for chat_id, game_state in active_games.items():
             if game_state.get("status") == "in_progress":
                 # For simplicity, if a timer was active, restart the auto-end timer
                 # More complex games like WordChain might need to re-evaluate their turn timers
-                game_state["timer_task"] = asyncio.create_task(
-                    auto_end_game_timer(chat_id, telegram_app._bot) # Use telegram_app._bot directly
-                )
-                logger.info(f"Restarted auto-end timer for active game in group {chat_id} on load.")
-
-        logger.info(f"Loaded {len(active_games)} active games from DB.")
+                # Ensure `telegram_app` is available and has `_bot` attribute here
+                # We defer starting these tasks until we have the `bot_instance` for sure.
+                pass # We will handle task re-creation after the bot application is fully built and started.
+        logger.info(f"Loaded {len(active_games)} active games from DB. Timer tasks will be re-initialized after bot start.")
     except Exception as e:
         logger.error(f"Error loading game states from DB: {e}")
 
@@ -1007,6 +1010,17 @@ async def initialize_telegram_bot_application():
     # Application को initialize करें
     await application.initialize() 
     await load_game_state_from_db() # Load active game states from DB (for persistence across restarts)
+
+    # Re-initialize timer tasks for active games after bot application is built and ready
+    # This loop was previously inside load_game_state_from_db, but needs `bot_instance`
+    for chat_id, game_state in active_games.items():
+        if game_state.get("status") == "in_progress":
+            # Pass the `application.bot` instance to the timer functions
+            game_state["timer_task"] = asyncio.create_task(
+                auto_end_game_timer(chat_id, application.bot) 
+            )
+            logger.info(f"Re-initialized auto-end timer for active game in group {chat_id} on bot restart.")
+
 
     # Handlers add karein
     application.add_handler(CommandHandler("start", start_command))
