@@ -799,8 +799,13 @@ async def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     application.add_handler(PollAnswerHandler(handle_poll_answer)) 
 
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # --- यहाँ बदलाव ---
+    # application.run_polling() की जगह application.start() और application.run_until_disconnected() का उपयोग करें
+    await application.start() # Bot को शुरू करें
+    logger.info("Telegram Bot Application started and polling for updates.")
+    await application.run_until_disconnected() # Bot को तब तक चलाए रखें जब तक वह डिस्कनेक्ट न हो जाए
     logger.info("Telegram Bot Polling has stopped.")
+    # --- बदलाव समाप्त ---
 
 
 async def handle_text_messages(update: Update, context: Application.bot):
@@ -816,3 +821,4 @@ async def handle_text_messages(update: Update, context: Application.bot):
             await handle_guessing_answer(update, context)
         elif game_state["game_type"] == "number_guessing":
             await handle_number_guess(update, context)
+
