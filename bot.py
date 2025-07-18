@@ -783,7 +783,11 @@ async def handle_number_guess(update: Update, context: Application.bot):
 # --- Main Bot Runner Function ---
 async def run_bot():
     logger.info("Starting Telegram Bot Application...")
+    
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # यह सुनिश्चित करने के लिए कि Application ऑब्जेक्ट सही ढंग से इवेंट लूप के साथ इनिशियलाइज़ हो।
+    await application.initialize() 
 
     await load_game_state_from_db()
 
@@ -799,13 +803,10 @@ async def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     application.add_handler(PollAnswerHandler(handle_poll_answer)) 
 
-    # --- यहाँ बदलाव ---
-    # application.run_polling() की जगह application.start() और application.run_until_disconnected() का उपयोग करें
-    await application.start() # Bot को शुरू करें
+    await application.start() 
     logger.info("Telegram Bot Application started and polling for updates.")
-    await application.run_until_disconnected() # Bot को तब तक चलाए रखें जब तक वह डिस्कनेक्ट न हो जाए
+    await application.run_until_disconnected() 
     logger.info("Telegram Bot Polling has stopped.")
-    # --- बदलाव समाप्त ---
 
 
 async def handle_text_messages(update: Update, context: Application.bot):
@@ -821,4 +822,3 @@ async def handle_text_messages(update: Update, context: Application.bot):
             await handle_guessing_answer(update, context)
         elif game_state["game_type"] == "number_guessing":
             await handle_number_guess(update, context)
-
