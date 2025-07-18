@@ -3,7 +3,12 @@
 import multiprocessing # multiprocessing module import karein
 import logging
 import os
-import asyncio # asyncio bhi import karein, bhale hi seedhe use na karein main process mein
+# asyncio को यहाँ इम्पोर्ट करने की ज़रूरत नहीं है अगर आप इसे सीधे main process में इस्तेमाल नहीं कर रहे हैं।
+# लेकिन अगर आपके run_telegram_bot_process फंक्शन में asyncio.run() है, तो bot.py को
+# asyncio इम्पोर्ट करना होगा। main.py में सीधे इसकी आवश्यकता नहीं है,
+# लेकिन clarity के लिए इसे रहने दिया जा सकता है।
+import time # time.sleep का उपयोग करने के लिए
+
 from dotenv import load_dotenv
 
 # Local files import karna
@@ -27,21 +32,20 @@ def run_flask_process():
         run_server() # server.py mein run_server ek synchronous function hai
     except Exception as e:
         logger.critical(f"Flask server failed to start: {e}")
-        # Process ko exit kar de, poore application ko nahi
-        os._exit(1)
+        os._exit(1) # Process ko exit kar de, poore application ko nahi
 
 # Telegram Bot ko alag process mein chalane ke liye function
 def run_telegram_bot_process():
     """Telegram Bot ko ek alag process mein run karta hai."""
     logger.info("Starting Telegram Bot in a separate process...")
     try:
-        # run_bot() ek async function hai, ise seedhe asyncio.run() se chalayein
-        # naye process mein iska apna main thread hoga
+        # यहाँ asyncio को इम्पोर्ट किया जाता है और run_bot को चलाया जाता है।
+        # यह सुनिश्चित करता है कि Telegram bot एक नए, स्वतंत्र asyncio इवेंट लूप में चले।
+        import asyncio
         asyncio.run(run_bot())
     except Exception as e:
         logger.critical(f"Telegram Bot failed to run: {e}")
-        # Process ko exit kar de, poore application ko nahi
-        os._exit(1)
+        os._exit(1) # Process ko exit kar de, poore application ko nahi
 
 if __name__ == "__main__":
     # यह ब्लॉक सुनिश्चित करता है कि कोड केवल तभी चले जब स्क्रिप्ट को सीधे चलाया जाए
@@ -52,9 +56,9 @@ if __name__ == "__main__":
 
     # Flask server process start karein
     flask_process = multiprocessing.Process(target=run_flask_process)
-    # daemon=True set karne se parent process band hone par child process bhi band ho jayega.
-    # Production environments mein aap ise manage karna chah sakte hain.
-    flask_process.daemon = True 
+    # daemon=True सेट करने से parent process बंद होने पर child process भी बंद हो जाएगा।
+    # Production environments में आप इसे manage करना चाह सकते हैं।
+    flask_process.daemon = True
     flask_process.start()
     logger.info("Flask server process started.")
 
@@ -65,19 +69,11 @@ if __name__ == "__main__":
     logger.info("Telegram Bot process started.")
 
     try:
-        # Main process ko chalte rehne de, jab tak sub-processes chal rahe hain
-        # या Ctrl+C ना दबाया जाए।
-        # .join() method parent process को child processes के खत्म होने का इंतज़ार कराता है।
-        # Daemon processes के लिए, .join() केवल तभी उपयोगी है जब आप चाहते हैं कि parent
-        # child के खत्म होने का इंतज़ार करे; अन्यथा, parent के खत्म होने पर child भी खत्म हो जाएगा।
-        # हम यहाँ एक infinite loop रखेंगे ताकि main process चलता रहे और daemon children को alive रखे।
-        
+        # Main process को जीवित रखने के लिए, हम एक infinite loop का उपयोग करते हैं
+        # जो CPU को व्यस्त नहीं करता। यह सुनिश्चित करता है कि daemon child processes चलते रहें।
         logger.info("Main application loop running. Press Ctrl+C to stop.")
         while True:
-            # हर 1 घंटे में एक बार Sleep करें, ताकि CPU usage कम हो
-            # और main process बस alive रहे।
-            # आप इसे अपनी ज़रूरत के अनुसार बदल सकते हैं।
-            asyncio.sleep(3600) 
+            time.sleep(1) # हर सेकंड एक बार रुकेगा, CPU usage कम रखेगा
 
     except KeyboardInterrupt:
         logger.info("Application interrupted by user (Ctrl+C detected).")
@@ -89,7 +85,7 @@ if __name__ == "__main__":
         
         # processes के खत्म होने का इंतज़ार करें (optional, cleanup ke liye)
         # अगर daemon=True है, तो ये कॉल हमेशा ब्लॉक नहीं करेंगे।
-        flask_process.join() 
+        flask_process.join()
         telegram_bot_process.join()
         
         logger.info("Application processes terminated.")
