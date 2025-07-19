@@ -1,6 +1,6 @@
-python-telegram-bot[job-queue]==20.3
+pyrogram==2.0.106
 pymongo==4.6.2
-flask
 dnspython==2.6.1
 python-dotenv==1.0.1
-TgCrypto
+tgcrypto==1.2.5
+flask==2.3.2
