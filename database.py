@@ -34,24 +34,9 @@ class MongoDB:
             self._ensure_indexes()
             
             # --- CRITICAL DEBUGGING CODE START ---
-            # Isse hum yeh jaan payenge ki agar 'self.db' ko kahi galat tarike se boolean mein convert kiya ja raha hai
-            try:
-                # Intentionally try to convert self.db to a boolean
-                # If this fails, it means some other part of your code is doing this.
-                bool_check_result = bool(self.db)
-                logger.debug(f"DEBUG: bool(self.db) evaluated to {bool_check_result}. This line should not be reached if the TypeError occurs.")
-            except TypeError as e:
-                logger.critical(
-                    f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
-                    f"CRITICAL TRUTH VALUE ERROR DETECTED: 'self.db' object cannot be converted to bool.\n"
-                    f"This indicates a severe programming error where `if self.db:` or `if not self.db:`\n"
-                    f"is being used instead of `if self.db is not None:` or `if db_manager.connected:`.\n"
-                    f"Original Python error: {e}\n"
-                    f"Review all code where 'db_manager.db' is used. Exiting to provide stack trace.\n"
-                    f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", 
-                    exc_info=True # This will print the full stack trace!
-                )
-                sys.exit(1) # Force an exit to ensure the log is captured immediately
+            # यह कोड ब्लॉक हटा दिया गया है क्योंकि यह अनावश्यक रूप से TypeError को ट्रिगर कर रहा था
+            # और एप्लिकेशन को बंद कर रहा था, भले ही कनेक्शन सफल था।
+            # आप पहले से ही self.connected फ़्लैग का उपयोग कर रहे हैं जो सही तरीका है।
             # --- CRITICAL DEBUGGING CODE END ---
 
         except Exception as e:
@@ -63,7 +48,7 @@ class MongoDB:
         Zaroori collections ke liye indexes banata hai.
         Agar indexes banane mein koi error aati hai, to bhi connection ko True rakhta hai.
         """
-        if self.db: # This check is fine because self.db will be an object if connected, not None
+        if self.connected and self.db is not None: # `self.db is not None` check यहाँ जोड़ा गया है
             try:
                 # 'game_states' collection ke liye index
                 self.db.game_states.create_index([("group_id", ASCENDING)], unique=True, name="group_id_idx")
@@ -84,16 +69,16 @@ class MongoDB:
                 # kyuki initial connection successful raha hai.
                 logger.error(f"Error ensuring MongoDB indexes: {e}. The database connection remains active.")
         else:
-            logger.warning("Cannot ensure indexes: MongoDB not connected.")
+            logger.warning("Cannot ensure indexes: MongoDB not connected or self.db is None.")
 
 
     def get_collection(self, collection_name):
         """
         Diye gaye naam se MongoDB collection return karta hai, agar database connected hai.
         """
-        if self.connected: 
+        if self.connected and self.db is not None: # `self.db is not None` check यहाँ जोड़ा गया है
             return self.db[collection_name]
-        logger.warning(f"Attempted to get collection '{collection_name}' but MongoDB is not connected.")
+        logger.warning(f"Attempted to get collection '{collection_name}' but MongoDB is not connected or self.db is None.")
         return None
 
     # --- Game State Management ---
@@ -249,4 +234,3 @@ class MongoDB:
                 logger.error(f"Error deleting oldest game content: {e}")
                 return []
         return []
-
