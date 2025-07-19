@@ -926,7 +926,10 @@ async def button_handler(client: Client, query: CallbackQuery):
 
 # --- Pyrogram Message Handlers (for general text and game answers) ---
 
-@app.on_message(filters.text & ~filters.command() & filters.group)
+# ************************************************************************************
+# यहाँ बदलाव किया गया है: filters.command() को filters.create(...) से बदला गया है
+# ************************************************************************************
+@app.on_message(filters.text & filters.group & ~filters.create(lambda _, __, msg: msg.text and msg.text.startswith('/')))
 async def handle_text_messages(client: Client, message: Message):
     chat_id = message.chat.id
     game_state = active_games.get(chat_id)
@@ -989,7 +992,7 @@ async def start_telegram_bot_and_flask():
                  game_state["timer_task"] = asyncio.create_task(
                     turn_timer(chat_id, 60, app, "wordchain")
                 )
-            elif game_type == "guessing":
+            elif game_state["game_type"] == "guessing": # Make sure this 'elif' uses game_state["game_type"]
                 game_state["timer_task"] = asyncio.create_task(
                     send_next_guess_item(chat_id, app)
                 )
