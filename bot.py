@@ -19,9 +19,7 @@ from pyrogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     User,
-    # PollAnswer removed as we are removing poll functionality
 )
-# PollAnswer import and PollAnswerHandler import removed
 
 from pymongo import MongoClient
 from flask import Flask, jsonify
@@ -96,7 +94,8 @@ active_games = {}
 # Helper functions
 async def get_channel_content(game_type: str):
     """Fetch content for a specific game type from MongoDB"""
-    if not channel_content_cache_collection:
+    # Corrected check: compare with None
+    if channel_content_cache_collection is None:
         logger.error("Channel content collection not initialized")
         return []
 
@@ -111,7 +110,8 @@ async def get_channel_content(game_type: str):
 
 async def update_user_score(user_id: int, username: str, group_id: int, points: int):
     """Update user score in MongoDB"""
-    if not users_collection:
+    # Corrected check: compare with None
+    if users_collection is None:
         logger.error("Users collection not initialized")
         return
 
@@ -128,7 +128,8 @@ async def update_user_score(user_id: int, username: str, group_id: int, points: 
 
 async def get_leaderboard(group_id: int = None):
     """Fetch leaderboard from MongoDB"""
-    if not users_collection:
+    # Corrected check: compare with None
+    if users_collection is None:
         logger.error("Users collection not initialized")
         return []
 
@@ -151,7 +152,8 @@ async def is_admin(chat_id: int, user_id: int, client: Client):
 
 async def save_game_state(chat_id: int):
     """Save game state to MongoDB"""
-    if not game_states_collection or chat_id not in active_games:
+    # Corrected check: compare with None
+    if game_states_collection is None or chat_id not in active_games:
         return
 
     try:
@@ -171,7 +173,8 @@ async def save_game_state(chat_id: int):
 async def load_game_states():
     """Load active games from MongoDB"""
     global active_games
-    if not game_states_collection:
+    # Corrected check: compare with None
+    if game_states_collection is None:
         logger.error("Game states collection not initialized")
         return
 
@@ -192,7 +195,8 @@ async def auto_end_game(chat_id: int, client: Client):
         if (datetime.utcnow() - last_activity).total_seconds() >= 300:  # 5 minutes
             await client.send_message(chat_id, "Game auto-ended due to inactivity")
             del active_games[chat_id]
-            if game_states_collection:
+            # Corrected check: compare with None
+            if game_states_collection is not None:
                 game_states_collection.delete_one({"_id": chat_id})
             logger.info(f"Auto-ended game in chat {chat_id}")
             break
@@ -213,7 +217,8 @@ async def start_game_countdown(chat_id: int, game_type: str, message: Message, c
         if players_count == 0:
             await message.edit_text("Game cancelled - no players joined")
             del active_games[chat_id]
-            if game_states_collection:
+            # Corrected check: compare with None
+            if game_states_collection is not None:
                 game_states_collection.delete_one({"_id": chat_id})
             return
 
@@ -242,7 +247,8 @@ async def start_quiz_game(chat_id: int, client: Client):
     if not questions:
         await client.send_message(chat_id, "Could not load quiz questions")
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         return
 
@@ -266,7 +272,8 @@ async def send_next_quiz_question(chat_id: int, client: Client):
         if game_state["current_round"] >= len(game_state["quiz_data"]):
             await client.send_message(chat_id, "Quiz completed!")
             del active_games[chat_id]
-            if game_states_collection:
+            # Corrected check: compare with None
+            if game_states_collection is not None:
                 game_states_collection.delete_one({"_id": chat_id})
             break
 
@@ -311,10 +318,6 @@ async def handle_quiz_answer_text(message: Message, client: Client):
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return
 
-    # Removed check for poll type question as we only have text now
-    # if game_state["current_question"].get("type") == "poll":
-    #    return
-
     if game_state["answered_this_round"]:
         await message.reply("This question was already answered")
         return
@@ -331,8 +334,6 @@ async def handle_quiz_answer_text(message: Message, client: Client):
         })
         await save_game_state(chat_id)
 
-# handle_quiz_poll_answer function removed as poll functionality is removed
-
 # Wordchain game functions
 async def start_wordchain_game(chat_id: int, client: Client):
     """Initialize wordchain game"""
@@ -340,7 +341,8 @@ async def start_wordchain_game(chat_id: int, client: Client):
     if not words:
         await client.send_message(chat_id, "Could not load wordchain words")
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         return
 
@@ -350,7 +352,8 @@ async def start_wordchain_game(chat_id: int, client: Client):
     if not players:
         await client.send_message(chat_id, "Game cancelled - no players")
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         return
 
@@ -428,7 +431,8 @@ async def handle_wordchain_answer(message: Message, client: Client):
         if len(game_state["players"]) < 2:
             await client.send_message(chat_id, "Game ended - not enough players")
             del active_games[chat_id]
-            if game_states_collection:
+            # Corrected check: compare with None
+            if game_states_collection is not None:
                 game_states_collection.delete_one({"_id": chat_id})
         else:
             if game_state["turn_index"] >= len(game_state["players"]):
@@ -450,7 +454,8 @@ async def start_guessing_game(chat_id: int, client: Client):
     if not guesses:
         await client.send_message(chat_id, "Could not load guessing content")
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         return
 
@@ -477,7 +482,8 @@ async def send_next_guess_item(chat_id: int, client: Client):
     if game_state["current_round"] >= len(game_state["guessing_data"]):
         await client.send_message(chat_id, "Guessing game completed!")
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         return
 
@@ -600,7 +606,8 @@ async def handle_number_guess(message: Message, client: Client):
         if game_state.get("timer_task"):
             game_state["timer_task"].cancel()
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
     elif user_guess < secret_number:
         await message.reply("Higher!")
@@ -633,7 +640,8 @@ async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str
         if len(game_state["players"]) < 2:
             await client.send_message(chat_id, "Game ended - not enough players")
             del active_games[chat_id]
-            if game_states_collection:
+            # Corrected check: compare with None
+            if game_states_collection is not None:
                 game_states_collection.delete_one({"_id": chat_id})
         else:
             if game_state["turn_index"] >= len(game_state["players"]):
@@ -675,7 +683,8 @@ async def start_command(client: Client, message: Message):
     if chat.type == "private":
         log_msg = f"New user: {user.full_name} ({user.id})"
     elif chat.type in ["group", "supergroup"]:
-        if groups_collection:
+        # Corrected check: compare with None
+        if groups_collection is not None:
             groups_collection.update_one(
                 {"_id": chat.id},
                 {"$set": {"name": chat.title, "active": True, "last_seen": datetime.utcnow()}},
@@ -714,7 +723,8 @@ async def broadcast_command(client: Client, message: Message):
     message_content = " ".join(message.command[1:])
     sent_count = 0
 
-    if groups_collection:
+    # Corrected check: compare with None
+    if groups_collection is not None:
         all_groups = groups_collection.find({"active": True})
         for group in all_groups:
             try:
@@ -745,7 +755,8 @@ async def endgame_command(client: Client, message: Message):
         if active_games[chat_id].get("timer_task"):
             active_games[chat_id]["timer_task"].cancel()
         del active_games[chat_id]
-        if game_states_collection:
+        # Corrected check: compare with None
+        if game_states_collection is not None:
             game_states_collection.delete_one({"_id": chat_id})
         await message.reply("Game ended")
     else:
@@ -781,7 +792,8 @@ async def leaderboard_command(client: Client, message: Message):
 async def mystats_command(client: Client, message: Message):
     """Handle /mystats command"""
     user_id = message.from_user.id
-    if not users_collection:
+    # Corrected check: compare with None
+    if users_collection is None:
         await message.reply("Stats unavailable")
         return
 
@@ -789,7 +801,8 @@ async def mystats_command(client: Client, message: Message):
     if user_data:
         response = f"**Your Stats:**\nTotal Score: {user_data.get('total_score', 0)}\n"
 
-        if user_data.get('group_scores') and groups_collection:
+        # Corrected check: compare with None
+        if user_data.get('group_scores') and groups_collection is not None:
             response += "\n**Group Scores:**\n"
             for group_id, score in user_data['group_scores'].items():
                 group = groups_collection.find_one({"_id": int(group_id)})
@@ -891,7 +904,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         else:
             await query.answer("You already joined", show_alert=True)
 
-# Corrected line for handle_game_answers
+# Message handler for game answers
 @app.on_message(filters.text & filters.group & ~filters.regex(r"^\/"))
 async def handle_game_answers(client: Client, message: Message):
     """Handle all game answer messages"""
@@ -907,8 +920,6 @@ async def handle_game_answers(client: Client, message: Message):
             await handle_guessing_answer(message, client)
         elif game_state["game_type"] == "number_guessing":
             await handle_number_guess(message, client)
-
-# Poll answer handler removed
 
 # Flask server
 def run_flask():
