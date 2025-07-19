@@ -51,6 +51,7 @@ def health_check():
     return "Bot is running!", 200
 
 # --- Global Variables ---
+# db_manager ko yahan initialize karein taaki uska connection status check ho sake
 db_manager = MongoDB()
 
 # Active games ko track karne ke liye dictionary: {group_id: game_instance}
@@ -73,6 +74,10 @@ async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_
     """
     if not GAME_CHANNEL_ID:
         logger.error("GAME_CHANNEL_ID not set. Cannot fetch game data from channel.")
+        return None, None
+
+    if not db_manager.connected: # Add this check here as well
+        logger.error("MongoDB not connected. Cannot fetch game data.")
         return None, None
 
     try:
@@ -105,8 +110,6 @@ async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_
     except telegram.error.BadRequest as e:
         if "message not found" in str(e).lower():
             logger.warning(f"Message ID {message_id_to_fetch} channel {GAME_CHANNEL_ID} mein nahi mila. Shayad delete ho gaya.")
-            # Agar message nahi mila, to use DB se bhi hata dein (optional, lekin achha practice)
-            # db_manager.delete_game_content_by_message_id(message_id_to_fetch) # Is function ko database.py mein add karna hoga agar use karein
         else:
             logger.error(f"Telegram API error while fetching message {message_id_to_fetch}: {e}")
         return None, None
@@ -120,6 +123,10 @@ async def check_and_manage_game_content_storage(context: ContextTypes.DEFAULT_TY
     Agar ye MAX_GAME_CONTENT_ENTRIES tak pahunchta hai, to purani entries ko delete karta hai
     MongoDB aur Telegram channel dono se.
     """
+    if not db_manager.connected: # Add this check here
+        logger.error("MongoDB not connected. Skipping game content storage management.")
+        return
+
     current_count = db_manager.get_game_content_count()
     if current_count >= MAX_GAME_CONTENT_ENTRIES:
         count_to_delete = int(MAX_GAME_CONTENT_ENTRIES * DELETE_PERCENTAGE_ON_FULL)
@@ -173,7 +180,8 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
                          f"First turn: **{game.get_current_player()['username']}**\n\n"
                          f"Sawal: {game.question}" + (f" (Current: `{game.get_display_word()}`)" if isinstance(game, GuessingGame) else "")
                 )
-                db_manager.save_game_state(game.get_game_data_for_db())
+                if db_manager.connected: # Save game state only if connected
+                    db_manager.save_game_state(game.get_game_data_for_db())
                 context.job_queue.run_once(
                     lambda ctx: check_turn_timeout(ctx, game.game_id),
                     game.turn_timeout,
@@ -184,7 +192,8 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
                 await context.bot.send_message(chat_id=chat_id, text="Not enough players joined. Game cancelled.")
                 if chat_id in active_games:
                     del active_games[chat_id]
-                db_manager.delete_game_state(game.game_id)
+                if db_manager.connected: # Delete game state only if connected
+                    db_manager.delete_game_state(game.game_id)
                 await send_log_message(context, f"Game {game.game_id} in group {chat_id} cancelled due to no players.")
             return
 
@@ -223,7 +232,8 @@ async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
                     )
                     game.next_turn()
                     game.last_activity_time = asyncio.get_event_loop().time()
-                    db_manager.save_game_state(game.get_game_data_for_db())
+                    if db_manager.connected: # Save game state only if connected
+                        db_manager.save_game_state(game.get_game_data_for_db())
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=f"Agli baari **{game.get_current_player()['username']}** ki hai.\nSawal: {game.question}" + (f" (Current: `{game.get_display_word()}`)" if isinstance(game, GuessingGame) else ""),
@@ -267,17 +277,19 @@ async def end_game_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reaso
             results_msg = "Game Results:\n"
             sorted_players = sorted(game.players, key=lambda p: p['score'], reverse=True)
             for i, player in enumerate(sorted_players):
-                db_manager.update_user_stats(
-                    player['id'],
-                    player['username'],
-                    {"games_played": 1, "games_won": 1 if i == 0 else 0, "total_score": player['score']}
-                )
+                if db_manager.connected: # Update stats only if connected
+                    db_manager.update_user_stats(
+                        player['id'],
+                        player['username'],
+                        {"games_played": 1, "games_won": 1 if i == 0 else 0, "total_score": player['score']}
+                    )
                 results_msg += f"{i+1}. {player['username']}: {player['score']} points\n"
             await context.bot.send_message(chat_id=chat_id, text=results_msg)
         else:
             await context.bot.send_message(chat_id=chat_id, text="Khel mein koi player nahi tha.")
 
-        db_manager.delete_game_state(game_id)
+        if db_manager.connected: # Delete game state only if connected
+            db_manager.delete_game_state(game_id)
         del active_games[chat_id]
 
         for job in context.job_queue.get_jobs_by_name(f"join_alert_{game_id}"):
@@ -345,6 +357,11 @@ async def start_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE, gam
     if chat_id in active_games:
         await update.effective_message.reply_text("Is group mein pehle se ek game chal raha hai! Use `/endgame` se khatm karein.")
         return
+    
+    if not db_manager.connected: # Add this check
+        await update.effective_message.reply_text("Database se connect nahi ho paya. Game shuru nahi kar sakte.")
+        logger.error(f"Cannot start new game in group {chat_id}: MongoDB not connected.")
+        return
 
     # Game channel se data fetch karein
     question, answer = await fetch_game_data_from_channel(context, game_type)
@@ -388,7 +405,8 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
         if game.status == "waiting_for_players":
             if game.add_player(user.id, user.first_name):
                 await update.effective_message.reply_text(f"**{user.first_name}** game mein jud gaya hai!", parse_mode=ParseMode.MARKDOWN)
-                db_manager.save_game_state(game.get_game_data_for_db())
+                if db_manager.connected: # Save game state only if connected
+                    db_manager.save_game_state(game.get_game_data_for_db())
             else:
                 await update.effective_message.reply_text(f"**{user.first_name}**, aap pehle se hi game mein hain.", parse_mode=ParseMode.MARKDOWN)
         else:
@@ -431,7 +449,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
                 game.last_activity_time = asyncio.get_event_loop().time()
                 game.next_turn()
-                db_manager.save_game_state(game.get_game_data_for_db())
+                if db_manager.connected: # Save game state only if connected
+                    db_manager.save_game_state(game.get_game_data_for_db())
 
                 await update.message.reply_text(
                     f"Agli baari **{game.get_current_player()['username']}** ki hai.\n"
@@ -451,7 +470,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text("Galat jawab. Koshish karte rahiye!")
                 game.next_turn()
                 game.last_activity_time = asyncio.get_event_loop().time()
-                db_manager.save_game_state(game.get_game_data_for_db())
+                if db_manager.connected: # Save game state only if connected
+                    db_manager.save_game_state(game.get_game_data_for_db())
                 await update.message.reply_text(
                     f"Agli baari **{game.get_current_player()['username']}** ki hai.\n"
                     f"Sawal: {game.question}" + (f" (Current: `{game.get_display_word()}`)" if isinstance(game, GuessingGame) else ""),
@@ -481,6 +501,11 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Aapke stats display nahi kiye ja sakte kyunki user information available nahi hai.")
         return
 
+    if not db_manager.connected: # Add this check
+        await update.message.reply_text("Database se connect nahi ho paya. Stats retrieve nahi kar sakte.")
+        logger.error("Cannot retrieve user stats: MongoDB not connected.")
+        return
+
     user_id = update.effective_user.id
     username = update.effective_user.first_name
 
@@ -499,6 +524,11 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
+    if not db_manager.connected: # Add this check
+        await update.message.reply_text("Database se connect nahi ho paya. Leaderboard retrieve nahi kar sakte.")
+        logger.error("Cannot retrieve leaderboard: MongoDB not connected.")
+        return
+
     leaderboard_data = db_manager.get_leaderboard(limit=10, worldwide=True)
 
     if leaderboard_data:
@@ -542,6 +572,11 @@ async def add_game_content_command(update: Update, context: ContextTypes.DEFAULT
     if not GAME_CHANNEL_ID:
         await update.message.reply_text("GAME_CHANNEL_ID .env mein set nahi hai. Game content add nahi kar sakte.")
         await send_log_message(context, "Attempt to add game content failed: GAME_CHANNEL_ID not set.")
+        return
+    
+    if not db_manager.connected: # Add this check
+        await update.message.reply_text("Database se connect nahi ho paya. Game content add nahi kar sakte.")
+        logger.error("Cannot add game content: MongoDB not connected.")
         return
 
     full_message_text = update.message.text
@@ -622,55 +657,62 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Reload existing game states on startup
-    existing_games = db_manager.get_collection("game_states").find({})
-    for game_data in existing_games:
-        try:
-            game_instance = create_game(
-                game_data["game_type"],
-                game_data["_id"],
-                game_data["group_id"],
-                game_data["question"],
-                game_data["answer"]
-            )
-            if game_instance:
-                # Load remaining properties
-                game_instance.players = game_data.get("players", [])
-                game_instance.current_player_index = game_data.get("current_player_index", 0)
-                game_instance.status = game_data.get("status", "waiting_for_players")
-                game_instance.join_window_end_time = game_data.get("join_window_end_time", 0)
-                game_instance.last_activity_time = game_data.get("last_activity_time", 0)
-                game_instance.turn_timeout = game_data.get("turn_timeout", 30)
-
-                if game_instance.game_type == "wordchain": # Specific for wordchain
-                    game_instance.last_word_played = game_data.get("last_word_played")
-                elif game_instance.game_type == "guessing": # Specific for guessing
-                    game_instance.guessed_letters = set(game_data.get("guessed_letters", []))
-
-                active_games[game_instance.group_id] = game_instance
-                logger.info(f"Loaded active game {game_instance.game_id} in group {game_instance.group_id}.")
-                
-                # Re-schedule jobs if game is still active
-                if game_instance.status == "waiting_for_players":
-                    context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
-                    application.job_queue.run_once(
-                        lambda ctx: send_game_join_alerts(ctx, game_instance),
-                        max(1, int(game_instance.join_window_end_time - asyncio.get_event_loop().time())),
-                        data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
-                        name=f"join_alert_{game_instance.game_id}"
+    # Yeh part tabhi run karein jab db_manager.connected ho
+    if db_manager.connected: # IMPORTANT: Added check here
+        existing_games_collection = db_manager.get_collection("game_states")
+        if existing_games_collection: # Ensure collection was retrieved successfully
+            for game_data in existing_games_collection.find({}): # Now this is safe
+                try:
+                    game_instance = create_game(
+                        game_data["game_type"],
+                        game_data["_id"],
+                        game_data["group_id"],
+                        game_data["question"],
+                        game_data["answer"]
                     )
-                elif game_instance.status == "in_progress":
-                    context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
-                    application.job_queue.run_once(
-                        lambda ctx: check_turn_timeout(ctx, game_instance.game_id),
-                        max(1, int(game_instance.turn_timeout - (asyncio.get_event_loop().time() - game_instance.last_activity_time))),
-                        data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
-                        name=f"turn_timeout_{game_instance.game_id}"
-                    )
+                    if game_instance:
+                        # Load remaining properties
+                        game_instance.players = game_data.get("players", [])
+                        game_instance.current_player_index = game_data.get("current_player_index", 0)
+                        game_instance.status = game_data.get("status", "waiting_for_players")
+                        game_instance.join_window_end_time = game_data.get("join_window_end_time", 0)
+                        game_instance.last_activity_time = game_data.get("last_activity_time", 0)
+                        game_instance.turn_timeout = game_data.get("turn_timeout", 30)
 
-            else:
-                logger.error(f"Failed to create game instance for loaded data: {game_data}")
-        except Exception as e:
-            logger.error(f"Error loading game state {game_data.get('_id')}: {e}")
+                        if game_instance.game_type == "wordchain": # Specific for wordchain
+                            game_instance.last_word_played = game_data.get("last_word_played")
+                        elif game_instance.game_type == "guessing": # Specific for guessing
+                            game_instance.guessed_letters = set(game_data.get("guessed_letters", []))
+
+                        active_games[game_instance.group_id] = game_instance
+                        logger.info(f"Loaded active game {game_instance.game_id} in group {game_instance.group_id}.")
+                        
+                        # Re-schedule jobs if game is still active
+                        if game_instance.status == "waiting_for_players":
+                            context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
+                            application.job_queue.run_once(
+                                lambda ctx: send_game_join_alerts(ctx, game_instance),
+                                max(1, int(game_instance.join_window_end_time - asyncio.get_event_loop().time())),
+                                data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
+                                name=f"join_alert_{game_instance.game_id}"
+                            )
+                        elif game_instance.status == "in_progress":
+                            context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
+                            application.job_queue.run_once(
+                                lambda ctx: check_turn_timeout(ctx, game_instance.game_id),
+                                max(1, int(game_instance.turn_timeout - (asyncio.get_event_loop().time() - game_instance.last_activity_time))),
+                                data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
+                                name=f"turn_timeout_{game_instance.game_id}"
+                            )
+
+                    else:
+                        logger.error(f"Failed to create game instance for loaded data: {game_data}")
+                except Exception as e:
+                    logger.error(f"Error loading game state {game_data.get('_id')}: {e}")
+        else:
+            logger.warning("Could not retrieve 'game_states' collection on startup. Skipping game state reload.")
+    else:
+        logger.warning("MongoDB not connected. Skipping existing game states reload.")
 
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -686,6 +728,7 @@ if __name__ == "__main__":
         logger.error("Essential channel/owner IDs (GAME_CHANNEL_ID, LOG_CHANNEL_ID, OWNER_USER_ID) are not set correctly. Please check .env file.")
         exit(1)
 
+    # MongoDB connection check yahan pehle karein
     if not db_manager.connected:
         logger.error("Failed to connect to MongoDB. Exiting.")
         exit(1)
@@ -694,5 +737,6 @@ if __name__ == "__main__":
     flask_thread.start()
     logger.info("Flask server started in a separate thread.")
     
+    # Run the bot only if MongoDB connection is successful
     run_bot()
 
