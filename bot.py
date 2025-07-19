@@ -14,13 +14,16 @@ logger = logging.getLogger(__name__)
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
-    Message, 
-    CallbackQuery, 
-    InlineKeyboardButton, 
-    InlineKeyboardMarkup, 
+    Message,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     User,
-    PollAnswer
+    # PollAnswer # This is the problematic line
 )
+
+# Import PollAnswer from pyrogram.types.poll, which is its common location in newer Pyrogram versions
+from pyrogram.types.poll import PollAnswer
 
 # PollAnswer handler compatibility
 try:
@@ -88,13 +91,13 @@ def init_mongo():
 
 # Game constants
 GAME_QUIZ = "Quiz / Trivia"
-GAME_WORDCHAIN = "Shabd Shrinkhala" 
+GAME_WORDCHAIN = "Shabd Shrinkhala"
 GAME_GUESSING = "Andaaz Lagaao"
 GAME_NUMBER_GUESSING = "Sankhya Anuamaan"
 
 GAMES_LIST = [
     (GAME_QUIZ, "quiz"),
-    (GAME_WORDCHAIN, "wordchain"), 
+    (GAME_WORDCHAIN, "wordchain"),
     (GAME_GUESSING, "guessing"),
     (GAME_NUMBER_GUESSING, "number_guessing")
 ]
@@ -107,7 +110,7 @@ async def get_channel_content(game_type: str):
     if not channel_content_cache_collection:
         logger.error("Channel content collection not initialized")
         return []
-    
+
     try:
         content = list(channel_content_cache_collection.find({"game_type": game_type}))
         if not content:
@@ -122,7 +125,7 @@ async def update_user_score(user_id: int, username: str, group_id: int, points: 
     if not users_collection:
         logger.error("Users collection not initialized")
         return
-    
+
     try:
         users_collection.update_one(
             {"user_id": user_id},
@@ -139,7 +142,7 @@ async def get_leaderboard(group_id: int = None):
     if not users_collection:
         logger.error("Users collection not initialized")
         return []
-    
+
     try:
         if group_id:
             return list(users_collection.find().sort(f"group_scores.{group_id}", -1).limit(10))
@@ -161,12 +164,12 @@ async def save_game_state(chat_id: int):
     """Save game state to MongoDB"""
     if not game_states_collection or chat_id not in active_games:
         return
-    
+
     try:
         game_state = active_games[chat_id].copy()
         if "timer_task" in game_state:
             del game_state["timer_task"]
-            
+
         game_states_collection.update_one(
             {"_id": chat_id},
             {"$set": game_state},
@@ -182,7 +185,7 @@ async def load_game_states():
     if not game_states_collection:
         logger.error("Game states collection not initialized")
         return
-    
+
     try:
         active_games = {doc["_id"]: doc for doc in game_states_collection.find()}
         logger.info(f"Loaded {len(active_games)} active games")
@@ -204,14 +207,14 @@ async def auto_end_game(chat_id: int, client: Client):
                 game_states_collection.delete_one({"_id": chat_id})
             logger.info(f"Auto-ended game in chat {chat_id}")
             break
-        
+
         await asyncio.sleep(30)
 
 # Game management functions
 async def start_game_countdown(chat_id: int, game_type: str, message: Message, client: Client):
     """Countdown before game starts"""
     await asyncio.sleep(60)
-    
+
     if chat_id in active_games and active_games[chat_id]["status"] == "waiting_for_players":
         game_state = active_games[chat_id]
         game_state["status"] = "in_progress"
@@ -227,7 +230,7 @@ async def start_game_countdown(chat_id: int, game_type: str, message: Message, c
 
         game_name = next((name for name, code in GAMES_LIST if code == game_type), "Game")
         await message.edit_text(f"**{game_name} Started!**\n\nPlayers: {players_count}")
-        
+
         # Start specific game
         if game_type == "quiz":
             await start_quiz_game(chat_id, client)
@@ -237,7 +240,7 @@ async def start_game_countdown(chat_id: int, game_type: str, message: Message, c
             await start_guessing_game(chat_id, client)
         elif game_type == "number_guessing":
             await start_number_guessing_game(chat_id, client)
-    
+
     if chat_id in active_games:
         active_games[chat_id]["timer_task"] = asyncio.create_task(
             auto_end_game(chat_id, client)
@@ -277,9 +280,9 @@ async def send_next_quiz_question(chat_id: int, client: Client):
             if game_states_collection:
                 game_states_collection.delete_one({"_id": chat_id})
             break
-        
+
         question_data = game_state["quiz_data"][game_state["current_round"]]
-        
+
         if "options" in question_data:
             message = await client.send_poll(
                 chat_id=chat_id,
@@ -305,10 +308,10 @@ async def send_next_quiz_question(chat_id: int, client: Client):
                 parse_mode="Markdown"
             )
             game_state["current_question"] = {
-                "type": "text", 
+                "type": "text",
                 "correct_answer": question_data["answer"].lower()
             }
-        
+
         game_state.update({
             "answered_this_round": False,
             "last_activity_time": datetime.utcnow()
@@ -316,8 +319,8 @@ async def send_next_quiz_question(chat_id: int, client: Client):
         await save_game_state(chat_id)
 
         await asyncio.sleep(20)
-        
-        if (game_state["current_question"].get("type") == "text" and 
+
+        if (game_state["current_question"].get("type") == "text" and
             not game_state["answered_this_round"]):
             await client.send_message(
                 chat_id=chat_id,
@@ -334,10 +337,10 @@ async def handle_quiz_answer_text(message: Message, client: Client):
 
     if not game_state or game_state["game_type"] != "quiz" or game_state["status"] != "in_progress":
         return
-    
+
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return
-    
+
     if game_state["current_question"].get("type") == "poll":
         return
 
@@ -347,7 +350,7 @@ async def handle_quiz_answer_text(message: Message, client: Client):
 
     user_answer = message.text.lower()
     correct_answer = game_state["current_question"]["correct_answer"]
-    
+
     if user_answer == correct_answer:
         await message.reply(f"Correct! +10 points")
         await update_user_score(user.id, user.full_name, chat_id, 10)
@@ -363,18 +366,18 @@ async def handle_quiz_poll_answer(poll_answer: PollAnswer, client: Client):
     user_name = poll_answer.user.full_name
 
     for chat_id, game_state in active_games.items():
-        if (game_state.get("game_type") == "quiz" and 
+        if (game_state.get("game_type") == "quiz" and
             game_state.get("status") == "in_progress"):
             current_q = game_state.get("current_question", {})
-            if (current_q.get("type") == "poll" and 
+            if (current_q.get("type") == "poll" and
                 current_q.get("poll_id") == poll_answer.poll_id):
-                
+
                 if user_id not in [p["user_id"] for p in game_state["players"]]:
                     return
 
                 if game_state["answered_this_round"]:
                     return
-                
+
                 correct_option_id = current_q.get("correct_option_id")
                 if correct_option_id is not None and correct_option_id in poll_answer.option_ids:
                     await client.send_message(
@@ -407,7 +410,7 @@ async def start_wordchain_game(chat_id: int, client: Client):
 
     start_word = random.choice(words)["question"].strip().lower()
     players = active_games[chat_id]["players"]
-    
+
     if not players:
         await client.send_message(chat_id, "Game cancelled - no players")
         del active_games[chat_id]
@@ -424,12 +427,12 @@ async def start_wordchain_game(chat_id: int, client: Client):
 
     random.shuffle(players)
     current_player = players[active_games[chat_id]["turn_index"]]
-    
+
     await client.send_message(
         chat_id=chat_id,
         text=f"**Wordchain Started!**\n\nFirst word: **{start_word.upper()}**\n\n{current_player['username']}'s turn"
     )
-    
+
     active_games[chat_id]["timer_task"] = asyncio.create_task(
         turn_timer(chat_id, 60, client, "wordchain")
     )
@@ -442,7 +445,7 @@ async def handle_wordchain_answer(message: Message, client: Client):
 
     if not game_state or game_state["game_type"] != "wordchain" or game_state["status"] != "in_progress":
         return
-    
+
     if not game_state["players"]:
         return
 
@@ -457,7 +460,7 @@ async def handle_wordchain_answer(message: Message, client: Client):
     if user_word.startswith(last_char) and len(user_word) > 1 and user_word.isalpha():
         await update_user_score(user.id, user.full_name, chat_id, 5)
         await message.reply(f"Correct! New word: **{user_word.upper()}**")
-        
+
         game_state.update({
             "current_word": user_word,
             "turn_index": (game_state["turn_index"] + 1) % len(game_state["players"]),
@@ -467,7 +470,7 @@ async def handle_wordchain_answer(message: Message, client: Client):
 
         if game_state.get("timer_task"):
             game_state["timer_task"].cancel()
-        
+
         next_player = game_state["players"][game_state["turn_index"]]
         await client.send_message(
             chat_id=chat_id,
@@ -478,7 +481,7 @@ async def handle_wordchain_answer(message: Message, client: Client):
         )
     else:
         await message.reply(f"Invalid word! {user.full_name} is out")
-        
+
         game_state["players"] = [p for p in game_state["players"] if p["user_id"] != user.id]
         game_state["last_activity_time"] = datetime.utcnow()
         await save_game_state(chat_id)
@@ -494,7 +497,7 @@ async def handle_wordchain_answer(message: Message, client: Client):
         else:
             if game_state["turn_index"] >= len(game_state["players"]):
                 game_state["turn_index"] = 0
-            
+
             next_player = game_state["players"][game_state["turn_index"]]
             await client.send_message(
                 chat_id=chat_id,
@@ -543,13 +546,13 @@ async def send_next_guess_item(chat_id: int, client: Client):
         return
 
     guess_item = game_state["guessing_data"][game_state["current_round"]]
-    
+
     await client.send_message(
         chat_id=chat_id,
         text=f"**Round {game_state['current_round'] + 1}:**\n\nGuess: `{guess_item['question']}`",
         parse_mode="Markdown"
     )
-    
+
     game_state.update({
         "current_guess_item": {
             "question": guess_item["question"],
@@ -575,10 +578,10 @@ async def handle_guessing_answer(message: Message, client: Client):
 
     if not game_state or game_state["game_type"] != "guessing" or game_state["status"] != "in_progress":
         return
-    
+
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return
-    
+
     if game_state["guessed_this_round"]:
         return
 
@@ -589,10 +592,10 @@ async def handle_guessing_answer(message: Message, client: Client):
         await update_user_score(user.id, user.full_name, chat_id, 15)
         await message.reply(f"Correct! +15 points")
         game_state["guessed_this_round"] = True
-        
+
         if game_state.get("timer_task"):
             game_state["timer_task"].cancel()
-        
+
         game_state["current_round"] += 1
         game_state["last_activity_time"] = datetime.utcnow()
         await save_game_state(chat_id)
@@ -616,7 +619,7 @@ async def start_number_guessing_game(chat_id: int, client: Client):
         "last_activity_time": datetime.utcnow()
     })
     await save_game_state(chat_id)
-    
+
     await client.send_message(
         chat_id=chat_id,
         text="**Number Guessing Started!**\n\nGuess a number between 1-100"
@@ -633,7 +636,7 @@ async def handle_number_guess(message: Message, client: Client):
 
     if not game_state or game_state["game_type"] != "number_guessing" or game_state["status"] != "in_progress":
         return
-    
+
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return
 
@@ -648,16 +651,16 @@ async def handle_number_guess(message: Message, client: Client):
 
     secret_number = game_state["secret_number"]
     user_id_str = str(user.id)
-    game_state["guesses_made"][user_id_str] = game_state["guesses_made"].get(user_id_str, 0) + 1 
+    game_state["guesses_made"][user_id_str] = game_state["guesses_made"].get(user_id_str, 0) + 1
     game_state["last_activity_time"] = datetime.utcnow()
     await save_game_state(chat_id)
-    
+
     if user_guess == secret_number:
         guesses_count = game_state["guesses_made"][user_id_str]
         points = max(10, 100 - (guesses_count * 5))
         await update_user_score(user.id, user.full_name, chat_id, points)
         await message.reply(f"Correct! +{points} points (guesses: {guesses_count})")
-        
+
         if game_state.get("timer_task"):
             game_state["timer_task"].cancel()
         del active_games[chat_id]
@@ -672,11 +675,11 @@ async def handle_number_guess(message: Message, client: Client):
 async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str):
     """Handle turn timers for games"""
     await asyncio.sleep(duration)
-    
+
     game_state = active_games.get(chat_id)
     if not game_state or game_state["status"] != "in_progress":
         return
-    
+
     if game_type == "wordchain":
         if not game_state["players"]:
             return
@@ -686,7 +689,7 @@ async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str
             chat_id=chat_id,
             text=f"{current_player['username']} didn't answer in time!"
         )
-        
+
         game_state["players"].pop(game_state["turn_index"])
         game_state["last_activity_time"] = datetime.utcnow()
         await save_game_state(chat_id)
@@ -699,7 +702,7 @@ async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str
         else:
             if game_state["turn_index"] >= len(game_state["players"]):
                 game_state["turn_index"] = 0
-            
+
             next_player = game_state["players"][game_state["turn_index"]]
             await client.send_message(
                 chat_id=chat_id,
@@ -708,7 +711,7 @@ async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str
             game_state["timer_task"] = asyncio.create_task(
                 turn_timer(chat_id, duration, client, "wordchain")
             )
-    
+
     elif game_type == "guessing":
         if not game_state["guessed_this_round"]:
             correct_answer = game_state["current_guess_item"]["answer"]
@@ -716,7 +719,7 @@ async def turn_timer(chat_id: int, duration: int, client: Client, game_type: str
                 chat_id=chat_id,
                 text=f"Time's up! Answer: **{correct_answer.upper()}**"
             )
-        
+
         game_state["current_round"] += 1
         game_state["last_activity_time"] = datetime.utcnow()
         await save_game_state(chat_id)
@@ -730,9 +733,9 @@ async def start_command(client: Client, message: Message):
     """Handle /start command"""
     user = message.from_user
     chat = message.chat
-    
+
     await message.reply(f"Hi {user.mention()}! Use /games to see available games")
-    
+
     if chat.type == "private":
         log_msg = f"New user: {user.full_name} ({user.id})"
     elif chat.type in ["group", "supergroup"]:
@@ -743,7 +746,7 @@ async def start_command(client: Client, message: Message):
                 upsert=True
             )
         log_msg = f"Bot added to group: {chat.title} ({chat.id})"
-    
+
     if LOG_CHANNEL_ID and "log_msg" in locals():
         try:
             await client.send_message(LOG_CHANNEL_ID, log_msg)
@@ -756,10 +759,10 @@ async def games_command(client: Client, message: Message):
     keyboard = []
     for game_name, game_callback_data in GAMES_LIST:
         keyboard.append([InlineKeyboardButton(
-            game_name, 
+            game_name,
             callback_data=f"show_rules_{game_callback_data}"
         )])
-    
+
     await message.reply(
         "Choose a game:",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -771,10 +774,10 @@ async def broadcast_command(client: Client, message: Message):
     if not message.command or len(message.command) < 2:
         await message.reply("Please provide a message")
         return
-    
+
     message_content = " ".join(message.command[1:])
     sent_count = 0
-    
+
     if groups_collection:
         all_groups = groups_collection.find({"active": True})
         for group in all_groups:
@@ -786,10 +789,10 @@ async def broadcast_command(client: Client, message: Message):
                 logger.error(f"Broadcast failed for {group['_id']}: {e}")
                 if "chat not found" in str(e).lower():
                     groups_collection.update_one(
-                        {"_id": group["_id"]}, 
+                        {"_id": group["_id"]},
                         {"$set": {"active": False}}
                     )
-    
+
     await message.reply(f"Broadcast sent to {sent_count} groups")
 
 @app.on_message(filters.command("endgame") & filters.group)
@@ -816,7 +819,7 @@ async def endgame_command(client: Client, message: Message):
 async def leaderboard_command(client: Client, message: Message):
     """Handle /leaderboard command"""
     group_id = message.chat.id if message.chat.type in ["group", "supergroup"] else None
-    
+
     if group_id:
         group_leaders = await get_leaderboard(group_id)
         if group_leaders:
@@ -827,7 +830,7 @@ async def leaderboard_command(client: Client, message: Message):
         else:
             response = "No group scores yet"
         await message.reply(response)
-    
+
     world_leaders = await get_leaderboard()
     if world_leaders:
         response = "\n**Global Leaderboard:**\n"
@@ -844,18 +847,18 @@ async def mystats_command(client: Client, message: Message):
     if not users_collection:
         await message.reply("Stats unavailable")
         return
-    
+
     user_data = users_collection.find_one({"user_id": user_id})
     if user_data:
         response = f"**Your Stats:**\nTotal Score: {user_data.get('total_score', 0)}\n"
-        
+
         if user_data.get('group_scores') and groups_collection:
             response += "\n**Group Scores:**\n"
             for group_id, score in user_data['group_scores'].items():
                 group = groups_collection.find_one({"_id": int(group_id)})
                 group_name = group.get("name", f"Group {group_id}") if group else f"Group {group_id}"
                 response += f"- {group_name}: {score} points\n"
-        
+
         await message.reply(response)
     else:
         await message.reply("No stats found")
@@ -868,31 +871,31 @@ async def callback_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     user = query.from_user
     data = query.data
-    
+
     if data.startswith("show_rules_"):
         game_type = data.replace("show_rules_", "")
         game_name = next((name for name, code in GAMES_LIST if code == game_type), "Game")
-        
+
         rules = {
             "quiz": "Answer quiz questions correctly to earn points",
             "wordchain": "Chain words together using the last letter",
             "guessing": "Guess the word/phrase from clues",
             "number_guessing": "Guess the secret number between 1-100"
         }.get(game_type, "No rules available")
-        
+
         keyboard = [[InlineKeyboardButton(
-            f"Start {game_name}", 
+            f"Start {game_name}",
             callback_data=f"start_game_{game_type}"
         )]]
-        
+
         await query.edit_message_text(
             f"**{game_name} Rules:**\n\n{rules}\n\nClick below to start",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    
+
     elif data.startswith("start_game_"):
         game_type = data.replace("start_game_", "")
-        
+
         if chat_id in active_games:
             await query.edit_message_text("A game is already active")
             return
@@ -906,7 +909,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
             "last_activity_time": datetime.utcnow()
         }
         await save_game_state(chat_id)
-        
+
         game_name = next((name for name, code in GAMES_LIST if code == game_type), "Game")
         await query.edit_message_text(
             f"**{game_name} Starting!**\n\nPlayers:\n",
@@ -914,14 +917,14 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 InlineKeyboardButton("Join Game", callback_data=f"join_game_{chat_id}")
             ]])
         )
-        
+
         active_games[chat_id]["timer_task"] = asyncio.create_task(
             start_game_countdown(chat_id, game_type, query.message, client)
         )
-    
+
     elif data.startswith("join_game_"):
         game_id = int(data.replace("join_game_", ""))
-        
+
         if game_id not in active_games or active_games[game_id]["status"] != "waiting_for_players":
             await query.answer("Cannot join now", show_alert=True)
             return
@@ -930,7 +933,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         if player_data not in active_games[game_id]["players"]:
             active_games[game_id]["players"].append(player_data)
             await save_game_state(game_id)
-            
+
             player_list = "\n".join([p["username"] for p in active_games[game_id]["players"]])
             try:
                 await query.edit_message_text(
@@ -957,7 +960,7 @@ async def handle_game_answers(client: Client, message: Message):
     """Handle all game answer messages"""
     chat_id = message.chat.id
     game_state = active_games.get(chat_id)
-    
+
     if game_state and game_state["status"] == "in_progress":
         if game_state["game_type"] == "quiz":
             await handle_quiz_answer_text(message, client)
@@ -993,7 +996,7 @@ async def main():
 
     await app.start()
     logger.info("Bot started successfully")
-    
+
     # Restart any interrupted games
     for chat_id, game_state in active_games.items():
         if game_state["status"] == "in_progress":
@@ -1014,7 +1017,7 @@ async def main():
                 game_state["timer_task"] = asyncio.create_task(
                     auto_end_game(chat_id, app)
                 )
-    
+
     await idle()
     await app.stop()
 
