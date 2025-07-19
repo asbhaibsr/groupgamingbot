@@ -19,21 +19,14 @@ from pyrogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     User,
-    # Reverting to original import for PollAnswer assuming Pyrogram v1.x
-    PollAnswer
+    # Correct import for Pyrogram v2.x
+    # PollAnswer is now in pyrogram.types.poll
 )
+from pyrogram.types.poll import PollAnswer # This line is changed/added
 
-# PollAnswer handler compatibility (Keeping this check for robustness,
-# but the primary issue was the import location for older Pyrogram versions)
-POLL_HANDLER_AVAILABLE = False
-try:
-    # Attempt to import PollAnswerHandler, which is typically for Pyrogram v2.x
-    from pyrogram.handlers import PollAnswerHandler
-    POLL_HANDLER_AVAILABLE = True
-    logger.info("Using PollAnswerHandler (Pyrogram v2.x compatible path)")
-except ImportError:
-    logger.warning("PollAnswerHandler not found, using fallback @app.on_poll_answer decorator (Pyrogram v1.x compatible path)")
-
+# For Pyrogram v2.x, PollAnswerHandler is the correct way
+from pyrogram.handlers import PollAnswerHandler
+logger.info("Using PollAnswerHandler (Pyrogram v2.x compatible path)")
 
 from pymongo import MongoClient
 from flask import Flask, jsonify
@@ -134,7 +127,7 @@ async def update_user_score(user_id: int, username: str, group_id: int, points: 
              "$set": {"username": username, "last_updated": datetime.utcnow()}},
             upsert=True
         )
-        logger.info(f"Updated score for user {username} ({user_id})")
+        logger.info(f"Updated score for user {username} ({user.id})")
     except Exception as e:
         logger.error(f"Error updating score: {e}")
 
@@ -836,7 +829,7 @@ async def leaderboard_command(client: Client, message: Message):
     if world_leaders:
         response = "\n**Global Leaderboard:**\n"
         for i, user in enumerate(world_leaders, 1):
-            response += f"{i}. {user.get('username', 'Unknown')} - {user.get('total_score', 0)} points\n"
+            response += f"{i}. {user.get('username', 'Unknown')} - user.get('total_score', 0)} points\n"
     else:
         response = "\nNo global scores yet"
     await message.reply(response)
@@ -967,18 +960,14 @@ async def handle_game_answers(client: Client, message: Message):
             await handle_quiz_answer_text(message, client)
         elif game_state["game_type"] == "wordchain":
             await handle_wordchain_answer(message, client)
-        elif game_type == "guessing":
+        elif game_state["game_type"] == "guessing": # Corrected 'game_type' here
             await handle_guessing_answer(message, client)
-        elif game_type == "number_guessing":
+        elif game_state["game_type"] == "number_guessing": # Corrected 'game_type' here
             await handle_number_guess(message, client)
 
-# Poll answer handler (both methods)
-if POLL_HANDLER_AVAILABLE:
-    app.add_handler(PollAnswerHandler(handle_quiz_poll_answer))
-else:
-    @app.on_poll_answer()
-    async def poll_answer_wrapper(client: Client, poll_answer: PollAnswer):
-        await handle_quiz_poll_answer(poll_answer, client)
+# Poll answer handler (Pyrogram v2.x only as determined by previous errors)
+app.add_handler(PollAnswerHandler(handle_quiz_poll_answer))
+
 
 # Flask server
 def run_flask():
@@ -1029,3 +1018,4 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.critical(f"Bot crashed: {e}")
+
