@@ -829,7 +829,7 @@ async def leaderboard_command(client: Client, message: Message):
     if world_leaders:
         response = "\n**Global Leaderboard:**\n"
         for i, user in enumerate(world_leaders, 1):
-            response += f"{i}. {user.get('username', 'Unknown')} - user.get('total_score', 0)} points\n"
+            response += f"{i}. {user.get('username', 'Unknown')} - {user.get('total_score', 0)} points\n"
     else:
         response = "\nNo global scores yet"
     await message.reply(response)
