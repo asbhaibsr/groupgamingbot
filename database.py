@@ -44,7 +44,8 @@ class MongoDB:
 
     def get_collection(self, collection_name):
         """Ek specific collection return karta hai."""
-        if self.db: # Ab yeh check sahi hai kyunki self.db ya toh Database object hoga ya None
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             return self.db[collection_name]
         print("Error: MongoDB not connected.")
         return None
@@ -52,7 +53,8 @@ class MongoDB:
     # Game State ke liye functions
     def save_game_state(self, game_data):
         """Game ki current state save karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             games_col = self.get_collection("game_states")
             games_col.update_one(
                 {"_id": game_data["_id"]}, # Unique ID for each game instance
@@ -65,14 +67,16 @@ class MongoDB:
 
     def get_game_state(self, game_id):
         """Ek specific game ki state retrieve karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             games_col = self.get_collection("game_states")
             return games_col.find_one({"_id": game_id})
         return None
 
     def delete_game_state(self, game_id):
         """Game khatm hone ke baad uski state delete karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             games_col = self.get_collection("game_states")
             result = games_col.delete_one({"_id": game_id})
             if result.deleted_count > 0:
@@ -84,7 +88,8 @@ class MongoDB:
     # User Stats ke liye functions
     def update_user_stats(self, user_id, username, stats_update):
         """User ke stats ko update karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             users_col = self.get_collection("user_stats")
             users_col.update_one(
                 {"_id": user_id},
@@ -97,14 +102,16 @@ class MongoDB:
 
     def get_user_stats(self, user_id):
         """Ek user ke stats retrieve karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             users_col = self.get_collection("user_stats")
             return users_col.find_one({"_id": user_id})
         return None
 
     def get_leaderboard(self, limit=10, worldwide=True):
         """Leaderboard data retrieve karta hai."""
-        if self.db:
+        # 'if self.db:' ko 'if self.db is not None:' se badla gaya
+        if self.db is not None:
             users_col = self.get_collection("user_stats")
             # Yahan aap apne scoring logic ke hisaab se sort kar sakte hain
             if worldwide:
@@ -152,4 +159,3 @@ if __name__ == "__main__":
         db_manager.delete_game_state(test_game_id)
     else:
         print("MongoDB connection failed, cannot run tests.")
-
