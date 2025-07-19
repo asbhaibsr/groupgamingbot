@@ -4,6 +4,7 @@ import asyncio
 import uuid
 import re
 from datetime import datetime, timedelta
+import random # 'random' module ko import karna na bhoolein kyunki ye fetch_game_data_from_channel mein upyog ho raha hai
 
 from flask import Flask
 from threading import Thread
@@ -251,6 +252,11 @@ async def end_game_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reaso
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start command."""
+    # effective_user की जांच करें
+    if update.effective_user is None:
+        logger.warning("Start command received with no effective user.")
+        return # या उचित तरीके से हैंडल करें
+
     user = update.effective_user
     welcome_message = (
         f"Namaste **{user.first_name}**!\n\n"
@@ -360,6 +366,12 @@ async def endgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Users ke messages ko handle karta hai (game answers ke liye)."""
     chat_id = update.effective_chat.id
+    
+    # === Yahan 'AttributeError: 'NoneType' object has no attribute 'id'' ko theek kiya gaya hai ===
+    if update.effective_user is None:
+        logger.warning(f"Message received in chat {chat_id} with no effective user. Ignoring.")
+        return # Agar user info nahi hai to function se bahar nikal jaayen.
+
     user_id = update.effective_user.id
     text = update.message.text
 
@@ -437,6 +449,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/my_stats command - User ke personal statistics dikhata hai."""
+    # effective_user की जांच करें
+    if update.effective_user is None:
+        logger.warning("My stats command received with no effective user.")
+        await update.message.reply_text("Aapke stats display nahi kiye ja sakte kyunki user information available nahi hai.")
+        return
+
     user_id = update.effective_user.id
     username = update.effective_user.first_name
 
@@ -467,6 +485,12 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/broadcast command - Owner ke liye messages broadcast karne ke liye."""
+    # effective_user की जांच करें
+    if update.effective_user is None:
+        logger.warning("Broadcast command received with no effective user. Cannot check owner ID.")
+        await update.message.reply_text("Broadcast command execute nahi ho sakta kyunki user information available nahi hai.")
+        return
+
     if update.effective_user.id != OWNER_USER_ID:
         await update.message.reply_text("Aapke paas is command ko use karne ki permission nahi hai.")
         return
@@ -530,4 +554,3 @@ if __name__ == "__main__":
 
     # Bot ko run karein (blocking call)
     run_bot()
-
