@@ -1,6 +1,7 @@
 import os
 from pymongo import MongoClient, ASCENDING
 import logging
+import sys # Import sys module for exiting
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -32,14 +33,26 @@ class MongoDB:
             logger.info("MongoDB connected successfully!")
             self._ensure_indexes()
             
-            # --- DEBUGGING CODE START ---
+            # --- CRITICAL DEBUGGING CODE START ---
             # Isse hum yeh jaan payenge ki agar 'self.db' ko kahi galat tarike se boolean mein convert kiya ja raha hai
             try:
-                bool(self.db) 
+                # Intentionally try to convert self.db to a boolean
+                # If this fails, it means some other part of your code is doing this.
+                bool_check_result = bool(self.db)
+                logger.debug(f"DEBUG: bool(self.db) evaluated to {bool_check_result}. This line should not be reached if the TypeError occurs.")
             except TypeError as e:
-                logger.critical(f"CRITICAL ERROR: 'self.db' object cannot be converted to bool. This is unexpected. Please check all uses of 'db_manager.db' in main.py and other files. Original error: {e}", exc_info=True)
-                raise # Is error ko dobara fekenge taaki stack trace mil sake
-            # --- DEBUGGING CODE END ---
+                logger.critical(
+                    f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+                    f"CRITICAL TRUTH VALUE ERROR DETECTED: 'self.db' object cannot be converted to bool.\n"
+                    f"This indicates a severe programming error where `if self.db:` or `if not self.db:`\n"
+                    f"is being used instead of `if self.db is not None:` or `if db_manager.connected:`.\n"
+                    f"Original Python error: {e}\n"
+                    f"Review all code where 'db_manager.db' is used. Exiting to provide stack trace.\n"
+                    f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", 
+                    exc_info=True # This will print the full stack trace!
+                )
+                sys.exit(1) # Force an exit to ensure the log is captured immediately
+            # --- CRITICAL DEBUGGING CODE END ---
 
         except Exception as e:
             logger.error(f"Could not connect to MongoDB: {e}")
@@ -50,7 +63,7 @@ class MongoDB:
         Zaroori collections ke liye indexes banata hai.
         Agar indexes banane mein koi error aati hai, to bhi connection ko True rakhta hai.
         """
-        if self.db:
+        if self.db: # This check is fine because self.db will be an object if connected, not None
             try:
                 # 'game_states' collection ke liye index
                 self.db.game_states.create_index([("group_id", ASCENDING)], unique=True, name="group_id_idx")
@@ -78,7 +91,7 @@ class MongoDB:
         """
         Diye gaye naam se MongoDB collection return karta hai, agar database connected hai.
         """
-        if self.connected: # self.db is not None ki jagah self.connected use karein for consistency
+        if self.connected: 
             return self.db[collection_name]
         logger.warning(f"Attempted to get collection '{collection_name}' but MongoDB is not connected.")
         return None
