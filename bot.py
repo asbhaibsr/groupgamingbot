@@ -950,32 +950,7 @@ def run_flask_server():
     """Starts the Flask server in a separate thread."""
     logger.info("Starting Flask server on port 8080...")
     try:
-        from gunicorn.app.base import BaseApplication
-
-        class StandaloneApplication(BaseApplication):
-            def __init__(self, app, options=None):
-                self.application = app
-                self.options = options or {}
-                super().__init__()
-
-            def load_config(self):
-                for key, value in self.options.items():
-                    if key in self.cfg.settings and value is not None:
-                        self.cfg.set(key.lower(), value)
-
-            def load_wsgi(self):
-                return self.application
-
-        options = {
-            'bind': '%s:%s' % ('0.0.0.0', '8080'),
-            'workers': 1,
-            'accesslog': '-',
-            'errorlog': '-',
-            'loglevel': 'info'
-        }
-        StandaloneApplication(flask_app_instance, options).run()
-    except ImportError:
-        logger.warning("Gunicorn not found, falling back to Flask's built-in server. This is not recommended for production.")
+        # Gunicorn-related code removed as per user's request
         flask_app_instance.run(host="0.0.0.0", port=8080)
     except Exception as e:
         logger.error(f"Error starting Flask server: {e}")
@@ -1014,7 +989,7 @@ async def start_telegram_bot_and_flask():
                  game_state["timer_task"] = asyncio.create_task(
                     turn_timer(chat_id, 60, app, "wordchain")
                 )
-            elif game_state["game_type"] == "guessing":
+            elif game_type == "guessing":
                 game_state["timer_task"] = asyncio.create_task(
                     send_next_guess_item(chat_id, app)
                 )
@@ -1046,4 +1021,3 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user (Ctrl+C).")
     except Exception as e:
         logger.critical(f"An unhandled exception occurred during bot execution: {e}", exc_info=True)
-
