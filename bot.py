@@ -12,7 +12,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 from pyrogram import Client, filters, idle
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, User
+from pyrogram.handlers import PollAnswerHandler
 
 # PollAnswer के लिए कॉम्पैटिबिलिटी फिक्स
 try:
@@ -21,8 +22,8 @@ except ImportError:
     logger.warning("PollAnswer could not be imported directly from pyrogram.types. Using a fallback class. Please consider updating Pyrogram for full functionality.")
     class PollAnswer:
         def __init__(self, **kwargs):
-            self.user = kwargs.get('user')
-            self.poll_id = kwargs.get('poll_id')
+            self.user = kwargs.get('user', User(id=0, first_name="", is_bot=False))
+            self.poll_id = kwargs.get('poll_id', "")
             self.option_ids = kwargs.get('option_ids', [])
         
         @property
@@ -944,9 +945,8 @@ async def handle_text_messages(client: Client, message: Message):
         elif game_state["game_type"] == "number_guessing":
             await handle_number_guess(message, client)
 
-@app.on_poll_answer()
-async def handle_poll_answer_main(client: Client, poll_answer: PollAnswer):
-    await handle_quiz_poll_answer(poll_answer, client)
+# Changed from @app.on_poll_answer() to using PollAnswerHandler
+app.add_handler(PollAnswerHandler(handle_quiz_poll_answer))
 
 # --- Flask Server Function ---
 def run_flask_server():
