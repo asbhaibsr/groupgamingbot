@@ -8,9 +8,11 @@ from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 
+# Import telegram library correctly
+import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler # CallbackQueryHandler bhi import karein
 )
 from telegram.constants import ParseMode
 
@@ -25,9 +27,9 @@ load_dotenv()
 # --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI") # Already handled in database.py but good for clarity
-GAME_CHANNEL_ID = int(os.getenv("GAME_CHANNEL_ID"))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
-OWNER_USER_ID = int(os.getenv("OWNER_USER_ID"))
+GAME_CHANNEL_ID = int(os.getenv("GAME_CHANNEL_ID")) if os.getenv("GAME_CHANNEL_ID") else 0
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else 0
+OWNER_USER_ID = int(os.getenv("OWNER_USER_ID")) if os.getenv("OWNER_USER_ID") else 0
 
 # Logger setup
 logging.basicConfig(
@@ -45,45 +47,30 @@ def health_check():
     return "Bot is running!", 200
 
 # --- Global Variables ---
-db_manager = MongoDB()
+db_manager = MongoDB() # MongoDB instance banate hi connect() call hoga
+
 # Active games ko track karne ke liye dictionary: {group_id: game_instance}
 active_games = {}
 
 # --- Helper Functions ---
 async def send_log_message(context: ContextTypes.DEFAULT_TYPE, message: str):
     """Log channel par messages bhejta hai."""
-    try:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=message)
-    except Exception as e:
-        logger.error(f"Failed to send log message to channel {LOG_CHANNEL_ID}: {e}")
+    if LOG_CHANNEL_ID: # Ensure log channel ID is set
+        try:
+            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=message)
+        except Exception as e:
+            logger.error(f"Failed to send log message to channel {LOG_CHANNEL_ID}: {e}")
+    else:
+        logger.warning("LOG_CHANNEL_ID not set, skipping log message.")
+
 
 async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_type: str):
     """
     Game channel se naya game data fetch karta hai.
     Format: /gametype - qus. [question] ans. [answer]
+    NOTE: Yeh abhi hardcoded hai. Aapko yahan channel reading logic implement karna hoga.
     """
     try:
-        # Channel se messages read karne ka seedha tareeka python-telegram-bot mein nahi hai.
-        # Iske liye aapko ya toh Pyrogram jaisi alag library use karni padegi
-        # ya phir ek admin bot se messages forward karwane ka system banana hoga.
-        #
-        # Abhi ke liye, main ek placeholder logic de raha hu, jise aapko implement karna hoga.
-        # Real-world mein, aapko Channel History ko read karna hoga ya webhook setup karna hoga
-        # jab naya message post ho.
-
-        # --- PLACEHOLDER LOGIC ---
-        # As an alternative, you might maintain a small list of questions/answers
-        # directly in your code or a separate JSON/CSV file for simplicity,
-        # or have an admin command to manually add them via the bot itself.
-        # For true channel fetching:
-        # 1. You'd need `pyrogram` or a custom client using Telegram Bot API's `getUpdates`
-        #    with a filter for your channel, or rely on forwarded messages.
-        # 2. Or, a simpler approach for MVP: have the admin manually input via a command
-        #    e.g., /add_wordchain_data A_P_P_L_E APPLE
-        # --- END PLACEHOLDER ---
-
-        # For demonstration, let's return some hardcoded values.
-        # YOU MUST REPLACE THIS WITH ACTUAL CHANNEL READING LOGIC.
         if game_type == "wordchain":
             qus_list = ["A _ P _ L _", "B_N_N_", "C_T_ _ _ _"]
             ans_list = ["APPLE", "BANANA", "COMPUTER"]
@@ -96,8 +83,7 @@ async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_
         else:
             return None, None
 
-        # Randomly choose one for now. In reality, you'd fetch from channel
-        # and mark it as used, or get new ones.
+        # Randomly choose one for now.
         idx = random.randint(0, len(qus_list) - 1)
         question = qus_list[idx]
         answer = ans_list[idx]
@@ -115,7 +101,9 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
         if game.status != "waiting_for_players":
             return # Agar game shuru ho gaya hai to alerts na bhejein
 
-        time_left = int(game.join_window_end_time - asyncio.get_event_loop().time())
+        # Abhi ka samay lein
+        current_time = asyncio.get_event_loop().time()
+        time_left = int(game.join_window_end_time - current_time)
         chat_id = game.group_id
 
         if 60 >= time_left > 40:
@@ -127,7 +115,7 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
         elif time_left <= 0 and game.status == "waiting_for_players":
             if len(game.players) >= 1: # Minimum 1 player to start
                 game.status = "in_progress"
-                game.last_activity_time = asyncio.get_event_loop().time()
+                game.last_activity_time = current_time
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=f"Time's up! Game **{game.__class__.__name__}** has started with {len(game.players)} players!\n"
@@ -144,21 +132,32 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
                 )
             else:
                 await context.bot.send_message(chat_id=chat_id, text="Not enough players joined. Game cancelled.")
-                del active_games[chat_id]
+                if chat_id in active_games: # Ensure it exists before deleting
+                    del active_games[chat_id]
                 db_manager.delete_game_state(game.game_id)
                 await send_log_message(context, f"Game {game.game_id} in group {chat_id} cancelled due to no players.")
             return # Job khatm
 
         # Schedule next alert (if needed)
         if game.status == "waiting_for_players":
-            next_alert_time = game.join_window_end_time - asyncio.get_event_loop().time() - 20
-            if next_alert_time > 0:
+            # Agla alert 20 second baad hoga, jab tak time_left positive ho
+            next_schedule_delay = min(time_left, 20)
+            if next_schedule_delay > 0:
                 context.job_queue.run_once(
                     lambda ctx: send_game_join_alerts(ctx, game),
-                    20, # Har 20 seconds mein check karein
+                    next_schedule_delay,
                     data={"game_id": game.game_id, "chat_id": chat_id},
                     name=f"join_alert_{game.game_id}"
                 )
+            else:
+                # Agar delay zero ya negative hai, matlab time khatm ho gaya hai, turant call karein
+                context.job_queue.run_once(
+                    lambda ctx: send_game_join_alerts(ctx, game),
+                    1, # Thoda sa delay de dein taaki event loop process kar sake
+                    data={"game_id": game.game_id, "chat_id": chat_id},
+                    name=f"join_alert_{game.game_id}"
+                )
+
 
     except Exception as e:
         logger.error(f"Error in send_game_join_alerts for game {game.game_id}: {e}")
@@ -198,12 +197,13 @@ async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
             else:
                 # Still within timeout, re-schedule check for when timeout expires
                 remaining_time = game.turn_timeout - time_since_last_activity
-                context.job_queue.run_once(
-                    lambda ctx: check_turn_timeout(ctx, game.game_id),
-                    remaining_time + 1, # Add a small buffer
-                    data={"game_id": game.game_id, "chat_id": chat_id},
-                    name=f"turn_timeout_{game.game_id}"
-                )
+                if remaining_time > 0: # Sirf positive remaining time ke liye schedule karein
+                    context.job_queue.run_once(
+                        lambda ctx: check_turn_timeout(ctx, game.game_id),
+                        remaining_time + 1, # Add a small buffer
+                        data={"game_id": game.game_id, "chat_id": chat_id},
+                        name=f"turn_timeout_{game.game_id}"
+                    )
     else:
         logger.info(f"Turn timeout job for game {game_id} cancelled as game no longer active.")
         # Job ko cancel karein
@@ -328,7 +328,7 @@ async def start_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE, gam
         # Join alerts schedule karein
         context.job_queue.run_once(
             lambda ctx: send_game_join_alerts(ctx, new_game),
-            20, # Pehla alert 20 sec baad
+            1, # Pehla alert 1 sec baad (immediately trigger first check)
             data={"game_id": game_id, "chat_id": chat_id},
             name=f"join_alert_{game_id}"
         )
@@ -431,7 +431,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
         else:
             # Not current player's turn
-            if game.get_current_player()['id'] != user_id:
+            if game.get_current_player() and game.get_current_player()['id'] != user_id:
                 await update.message.reply_text(f"Abhi **{game.get_current_player()['username']}** ki baari hai.")
     # Agar group mein koi active game nahi hai, to messages ko ignore karein ya kuch aur karein.
 
@@ -476,12 +476,13 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     broadcast_text = " ".join(context.args)
-    # Sabhi groups aur users ko message bhejna
-    # Yeh functionality complex ho sakti hai aur database mein chat_ids store karne ki zaroorat pad sakti hai.
-    # Abhi ke liye, yeh sirf ek placeholder hai. Real implementation mein:
-    # 1. Aapko saare groups aur private chats jahan bot active hai, unki list MongoDB mein store karni hogi.
-    # 2. Phir un sabhi chat_ids par message bhejna hoga.
-    await update.message.reply_text("Broadcast functionality is a placeholder. It needs actual chat_id fetching logic.")
+    
+    # NOTE: Is functionality ke liye, aapko apne database mein saare groups aur user IDs ko store karna hoga
+    # jahan bot active hai. Phir un sabhi par iterate karke message bhejna hoga.
+    # Abhi ke liye, yeh sirf ek placeholder hai aur sabhi chats par message nahi bhejega.
+    # Real implementation mein aapko ek 'chats' collection banani padegi.
+    
+    await update.message.reply_text("Broadcast functionality is a placeholder. It needs actual chat_id fetching logic from DB.")
     await send_log_message(context, f"Owner broadcast attempted: {broadcast_text}")
 
 # --- Bot Initialization ---
@@ -499,7 +500,7 @@ def run_bot():
     application.add_handler(CommandHandler("broadcast", broadcast_message))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(telegram.ext.CallbackQueryHandler(button_callback)) # Inline button callbacks
+    application.add_handler(CallbackQueryHandler(button_callback)) # Inline button callbacks
 
     # Bot ko start karein
     logger.info("Starting Telegram bot polling...")
@@ -509,19 +510,20 @@ def run_bot():
 # --- Flask Server aur Bot ko run karna ---
 if __name__ == "__main__":
     # Check for essential environment variables
-    if not BOT_TOKEN or not MONGO_URI or GAME_CHANNEL_ID == 0 or LOG_CHANNEL_ID == 0 or OWNER_USER_ID == 0:
-        logger.error("Essential environment variables (BOT_TOKEN, MONGO_URI, GAME_CHANNEL_ID, LOG_CHANNEL_ID, OWNER_USER_ID) are not set correctly. Exiting.")
+    if not BOT_TOKEN or not MONGO_URI:
+        logger.error("Essential environment variables (BOT_TOKEN, MONGO_URI) are not set. Exiting.")
+        exit(1)
+        
+    if not GAME_CHANNEL_ID or not LOG_CHANNEL_ID or not OWNER_USER_ID: # Check if IDs are actually set
+        logger.error("Essential channel/owner IDs (GAME_CHANNEL_ID, LOG_CHANNEL_ID, OWNER_USER_ID) are not set correctly. Please check .env file.")
         exit(1)
 
-    # MongoDB connection test
-    if not db_manager.db:
+    # MongoDB connection test using the 'connected' attribute
+    if not db_manager.connected: # Ab yeh check sahi hai
         logger.error("Failed to connect to MongoDB. Exiting.")
         exit(1)
-
+    
     # Flask server ko alag thread mein chalao
-    # Koyeb par deployment ke liye Gunicorn/Waitress jaise production server use hote hain.
-    # Yeh Flask server sirf health check ke liye hai.
-    # Main bot loop alag se run karega.
     flask_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))))
     flask_thread.start()
     logger.info("Flask server started in a separate thread.")
