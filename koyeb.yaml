@@ -1,0 +1,4 @@
+build:
+  commands:
+    - pip install --upgrade pip
+    - pip install -r requirements.txt --no-cache-dir
