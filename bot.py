@@ -19,14 +19,9 @@ from pyrogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     User,
-    # Correct import for Pyrogram v2.x
-    # PollAnswer is now in pyrogram.types.poll
+    # PollAnswer removed as we are removing poll functionality
 )
-from pyrogram.types.poll import PollAnswer # This line is changed/added
-
-# For Pyrogram v2.x, PollAnswerHandler is the correct way
-from pyrogram.handlers import PollAnswerHandler
-logger.info("Using PollAnswerHandler (Pyrogram v2.x compatible path)")
+# PollAnswer import and PollAnswerHandler import removed
 
 from pymongo import MongoClient
 from flask import Flask, jsonify
@@ -127,7 +122,7 @@ async def update_user_score(user_id: int, username: str, group_id: int, points: 
              "$set": {"username": username, "last_updated": datetime.utcnow()}},
             upsert=True
         )
-        logger.info(f"Updated score for user {username} ({user.id})")
+        logger.info(f"Updated score for user {username} ({user_id})")
     except Exception as e:
         logger.error(f"Error updating score: {e}")
 
@@ -277,34 +272,16 @@ async def send_next_quiz_question(chat_id: int, client: Client):
 
         question_data = game_state["quiz_data"][game_state["current_round"]]
 
-        if "options" in question_data:
-            message = await client.send_poll(
-                chat_id=chat_id,
-                question=question_data["text"],
-                options=question_data["options"],
-                is_anonymous=False,
-                type='quiz',
-                correct_option_id=question_data["correct_option_id"],
-                explanation=question_data.get("explanation", ""),
-                open_period=20
-            )
-            game_state["current_question"] = {
-                "type": "poll",
-                "message_id": message.id,
-                "poll_id": message.poll.id,
-                "correct_answer_text": question_data["options"][question_data["correct_option_id"]],
-                "correct_option_id": question_data["correct_option_id"]
-            }
-        else:
-            await client.send_message(
-                chat_id=chat_id,
-                text=f"**Question {game_state['current_round'] + 1}:**\n\n{question_data['text']}",
-                parse_mode="Markdown"
-            )
-            game_state["current_question"] = {
-                "type": "text",
-                "correct_answer": question_data["answer"].lower()
-            }
+        # Removed poll-related message sending
+        await client.send_message(
+            chat_id=chat_id,
+            text=f"**Question {game_state['current_round'] + 1}:**\n\n{question_data['text']}",
+            parse_mode="Markdown"
+        )
+        game_state["current_question"] = {
+            "type": "text",
+            "correct_answer": question_data["answer"].lower()
+        }
 
         game_state.update({
             "answered_this_round": False,
@@ -314,8 +291,7 @@ async def send_next_quiz_question(chat_id: int, client: Client):
 
         await asyncio.sleep(20)
 
-        if (game_state["current_question"].get("type") == "text" and
-            not game_state["answered_this_round"]):
+        if not game_state["answered_this_round"]:
             await client.send_message(
                 chat_id=chat_id,
                 text=f"Time's up! Correct answer: **{game_state['current_question']['correct_answer'].upper()}**"
@@ -335,8 +311,9 @@ async def handle_quiz_answer_text(message: Message, client: Client):
     if user.id not in [p["user_id"] for p in game_state["players"]]:
         return
 
-    if game_state["current_question"].get("type") == "poll":
-        return
+    # Removed check for poll type question as we only have text now
+    # if game_state["current_question"].get("type") == "poll":
+    #    return
 
     if game_state["answered_this_round"]:
         await message.reply("This question was already answered")
@@ -354,42 +331,7 @@ async def handle_quiz_answer_text(message: Message, client: Client):
         })
         await save_game_state(chat_id)
 
-async def handle_quiz_poll_answer(poll_answer: PollAnswer, client: Client):
-    """Handle poll answers for quiz"""
-    user_id = poll_answer.user.id
-    user_name = poll_answer.user.full_name
-
-    for chat_id, game_state in active_games.items():
-        if (game_state.get("game_type") == "quiz" and
-            game_state.get("status") == "in_progress"):
-            current_q = game_state.get("current_question", {})
-            if (current_q.get("type") == "poll" and
-                current_q.get("poll_id") == poll_answer.poll_id):
-
-                if user_id not in [p["user_id"] for p in game_state["players"]]:
-                    return
-
-                if game_state["answered_this_round"]:
-                    return
-
-                correct_option_id = current_q.get("correct_option_id")
-                if correct_option_id is not None and correct_option_id in poll_answer.option_ids:
-                    await client.send_message(
-                        chat_id=chat_id,
-                        text=f"Correct! +10 points for {user_name}"
-                    )
-                    await update_user_score(user_id, user_name, chat_id, 10)
-                    game_state.update({
-                        "answered_this_round": True,
-                        "last_activity_time": datetime.utcnow()
-                    })
-                    await save_game_state(chat_id)
-                else:
-                    await client.send_message(
-                        chat_id=chat_id,
-                        text=f"Wrong answer, {user_name}!"
-                    )
-                break
+# handle_quiz_poll_answer function removed as poll functionality is removed
 
 # Wordchain game functions
 async def start_wordchain_game(chat_id: int, client: Client):
@@ -829,6 +771,7 @@ async def leaderboard_command(client: Client, message: Message):
     if world_leaders:
         response = "\n**Global Leaderboard:**\n"
         for i, user in enumerate(world_leaders, 1):
+            # Corrected f-string syntax here
             response += f"{i}. {user.get('username', 'Unknown')} - {user.get('total_score', 0)} points\n"
     else:
         response = "\nNo global scores yet"
@@ -871,10 +814,10 @@ async def callback_handler(client: Client, query: CallbackQuery):
         game_name = next((name for name, code in GAMES_LIST if code == game_type), "Game")
 
         rules = {
-            "quiz": "Answer quiz questions correctly to earn points",
-            "wordchain": "Chain words together using the last letter",
-            "guessing": "Guess the word/phrase from clues",
-            "number_guessing": "Guess the secret number between 1-100"
+            "quiz": "Answer quiz questions correctly to earn points (text-based answers).",
+            "wordchain": "Chain words together using the last letter.",
+            "guessing": "Guess the word/phrase from clues.",
+            "number_guessing": "Guess the secret number between 1-100."
         }.get(game_type, "No rules available")
 
         keyboard = [[InlineKeyboardButton(
@@ -960,14 +903,12 @@ async def handle_game_answers(client: Client, message: Message):
             await handle_quiz_answer_text(message, client)
         elif game_state["game_type"] == "wordchain":
             await handle_wordchain_answer(message, client)
-        elif game_state["game_type"] == "guessing": # Corrected 'game_type' here
+        elif game_state["game_type"] == "guessing":
             await handle_guessing_answer(message, client)
-        elif game_state["game_type"] == "number_guessing": # Corrected 'game_type' here
+        elif game_state["game_type"] == "number_guessing":
             await handle_number_guess(message, client)
 
-# Poll answer handler (Pyrogram v2.x only as determined by previous errors)
-app.add_handler(PollAnswerHandler(handle_quiz_poll_answer))
-
+# Poll answer handler removed
 
 # Flask server
 def run_flask():
@@ -1018,4 +959,3 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.critical(f"Bot crashed: {e}")
-
