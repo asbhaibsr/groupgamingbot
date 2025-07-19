@@ -31,6 +31,16 @@ class MongoDB:
             self.connected = True
             logger.info("MongoDB connected successfully!")
             self._ensure_indexes()
+            
+            # --- DEBUGGING CODE START ---
+            # Isse hum yeh jaan payenge ki agar 'self.db' ko kahi galat tarike se boolean mein convert kiya ja raha hai
+            try:
+                bool(self.db) 
+            except TypeError as e:
+                logger.critical(f"CRITICAL ERROR: 'self.db' object cannot be converted to bool. This is unexpected. Please check all uses of 'db_manager.db' in main.py and other files. Original error: {e}", exc_info=True)
+                raise # Is error ko dobara fekenge taaki stack trace mil sake
+            # --- DEBUGGING CODE END ---
+
         except Exception as e:
             logger.error(f"Could not connect to MongoDB: {e}")
             self.connected = False # Connection fail hone par False set karein
