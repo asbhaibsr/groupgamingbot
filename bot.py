@@ -891,8 +891,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
         else:
             await query.answer("You already joined", show_alert=True)
 
-# Message handler for game answers
-@app.on_message(filters.text & filters.group & ~filters.command())
+# Corrected line for handle_game_answers
+@app.on_message(filters.text & filters.group & ~filters.regex(r"^\/"))
 async def handle_game_answers(client: Client, message: Message):
     """Handle all game answer messages"""
     chat_id = message.chat.id
