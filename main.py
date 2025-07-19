@@ -33,7 +33,7 @@ OWNER_USER_ID = int(os.getenv("OWNER_USER_ID")) if os.getenv("OWNER_USER_ID") el
 
 # Game content storage limits
 MAX_GAME_CONTENT_ENTRIES = 1000 # Max entries in game_content collection
-DELETE_PERCENTAGE_ON_FULL = 0.50 # If 100% full, delete this percentage (e.g., 0.50 means 50%)
+DELETE_PERCENTAGE_ON_FULL = 0.50 # If 100% full, delete this percentage (e.50 means 50%)
 
 # Logger setup
 logging.basicConfig(
@@ -88,6 +88,7 @@ async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_
             return None, None
 
         # Telegram Bot API ka upyog karke message ko fetch karein
+        # Context.bot ka upyog kiya gaya hai
         message = await context.bot.get_message(chat_id=GAME_CHANNEL_ID, message_id=message_id_to_fetch)
 
         if message and message.text:
@@ -110,6 +111,8 @@ async def fetch_game_data_from_channel(context: ContextTypes.DEFAULT_TYPE, game_
     except telegram.error.BadRequest as e:
         if "message not found" in str(e).lower():
             logger.warning(f"Message ID {message_id_to_fetch} channel {GAME_CHANNEL_ID} mein nahi mila. Shayad delete ho gaya.")
+        elif "bot is not a member of the channel" in str(e).lower() or "not an administrator" in str(e).lower():
+            logger.error(f"Bot lacks permissions to read messages in channel {GAME_CHANNEL_ID}: {e}. Ensure bot is admin with 'Read messages' permission.")
         else:
             logger.error(f"Telegram API error while fetching message {message_id_to_fetch}: {e}")
         return None, None
@@ -156,6 +159,11 @@ async def check_and_manage_game_content_storage(context: ContextTypes.DEFAULT_TY
 
 async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGame):
     try:
+        # Check if game is still active in active_games to prevent errors for ended games
+        if game.group_id not in active_games or active_games[game.group_id].game_id != game.game_id:
+            logger.info(f"Join alert for game {game.game_id} (group {game.group_id}) skipped, game no longer active.")
+            return
+
         if game.status != "waiting_for_players":
             return
 
@@ -177,7 +185,8 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
                     chat_id=chat_id,
                     text=f"Time's up! Game **{game.__class__.__name__}** has started with {len(game.players)} players!\n"
                          f"First turn: **{game.get_current_player()['username']}**\n\n"
-                         f"Sawal: {game.question}" + (f" (Current: `{game.get_display_word()}`)" if isinstance(game, GuessingGame) else "")
+                         f"Sawal: {game.question}" + (f" (Current: `{game.get_display_word()}`)" if isinstance(game, GuessingGame) else ""),
+                    parse_mode=ParseMode.MARKDOWN
                 )
                 if db_manager.connected: # Save game state only if connected
                     db_manager.save_game_state(game.get_game_data_for_db())
@@ -217,7 +226,7 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
 
 async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
     chat_id = context.job.data["chat_id"]
-    if chat_id in active_games:
+    if chat_id in active_games and active_games[chat_id].game_id == game_id:
         game = active_games[chat_id]
         if game.status == "in_progress":
             time_since_last_activity = asyncio.get_event_loop().time() - game.last_activity_time
@@ -226,7 +235,8 @@ async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
                 if current_player:
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"**{current_player['username']}**, aapne jawab nahi diya! Aapki baari gayi."
+                        text=f"**{current_player['username']}**, aapne jawab nahi diya! Aapki baari gayi.",
+                        parse_mode=ParseMode.MARKDOWN
                     )
                     game.next_turn()
                     game.last_activity_time = asyncio.get_event_loop().time()
@@ -251,14 +261,16 @@ async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
             else:
                 remaining_time = game.turn_timeout - time_since_last_activity
                 if remaining_time > 0:
+                    # JobQueue ko re-schedule karein, thoda zyada samay dekar taaki race condition na ho
                     context.job_queue.run_once(
                         lambda ctx: check_turn_timeout(ctx, game.game_id),
-                        remaining_time + 1,
+                        remaining_time + 1, # Add 1 second to ensure it runs after the timeout
                         data={"game_id": game.game_id, "chat_id": chat_id},
                         name=f"turn_timeout_{game.game_id}"
                     )
     else:
-        logger.info(f"Turn timeout job for game {game_id} cancelled as game no longer active.")
+        logger.info(f"Turn timeout job for game {game_id} cancelled as game no longer active or ID mismatch.")
+        # Ensure job is removed if game is no longer active
         for job in context.job_queue.get_jobs_by_name(f"turn_timeout_{game_id}"):
             job.schedule_removal()
 
@@ -424,11 +436,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if chat_id in active_games:
         game = active_games[chat_id]
 
-        if game.status == "in_progress" and game.get_current_player()['id'] == user_id:
+        # Ensure that the current player is indeed the one sending the message
+        current_player = game.get_current_player()
+        if not current_player:
+            logger.warning(f"No current player found for active game {game.game_id} in chat {chat_id}. Ignoring message from {user_id}.")
+            return
+
+        if game.status == "in_progress" and current_player['id'] == user_id:
+            # Check if it's a game-specific command and handle it if needed
+            # For example, if you had /hint or /skip commands for in-game
+            if text.startswith('/'):
+                logger.info(f"Ignoring command {text} from current player during in-progress game.")
+                return # Ignore commands during game unless they are specific game commands
+            
             if game.is_answer_correct(text):
-                current_player = game.get_current_player()
                 current_player['score'] += 10
-                await update.message.reply_text(f"Sahi jawab, **{current_player['username']}**! Aapko 10 points mile hain.")
+                await update.message.reply_text(f"Sahi jawab, **{current_player['username']}**! Aapko 10 points mile hain.", parse_mode=ParseMode.MARKDOWN)
                 
                 if isinstance(game, GuessingGame) and game.get_display_word().replace(" ", "") == game.answer:
                     await update.message.reply_text(f"Shabd mil gaya! **{game.answer}**\n\nGame khatm!", parse_mode=ParseMode.MARKDOWN)
@@ -478,12 +501,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
 
         elif game.status == "waiting_for_players":
-            pass
+            pass # Messages ignored when waiting for players
         elif game.status == "ended":
-            pass
+            pass # Messages ignored if game is ended
         else:
-            if game.get_current_player() and game.get_current_player()['id'] != user_id:
-                await update.message.reply_text(f"Abhi **{game.get_current_player()['username']}** ki baari hai.", parse_mode=ParseMode.MARKDOWN)
+            # If it's not the current player's turn, inform them
+            if current_player and current_player['id'] != user_id:
+                await update.message.reply_text(f"Abhi **{current_player['username']}** ki baari hai.", parse_mode=ParseMode.MARKDOWN)
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None:
@@ -569,7 +593,13 @@ async def add_game_content_command(update: Update, context: ContextTypes.DEFAULT
 
     full_message_text = update.message.text
     # Command part ko hata dein: "/addgame "
-    game_data_text = full_message_text[len("/addgame "):].strip()
+    # re.split ka upyog karein taaki sirf pehle "/addgame" ko hataaya ja sake
+    parts = re.split(r'^\s*/addgame\s*', full_message_text, 1)
+    if len(parts) < 2: # Should not happen if command is correctly `/addgame`
+        await update.message.reply_text("Invalid usage. Please use: `/addgame /gametype\\nque. [question]\\nans. [answer]`")
+        return
+
+    game_data_text = parts[1].strip()
 
     if not game_data_text:
         await update.message.reply_text("Kripya game content format mein dein.\n"
@@ -577,19 +607,32 @@ async def add_game_content_command(update: Update, context: ContextTypes.DEFAULT
                                         "Example: `/addgame /wordchain\\nque. A_ P_ L_\\nans. APPLE`")
         return
 
-    match = re.search(r"/(wordchain|guessing|wordcorrection)\nque\.\s*(.*?)\nans\.\s*(.*)", game_data_text, re.DOTALL | re.IGNORECASE)
+    # Regular expression ko refine kiya gaya hai taaki newline character escaped ho ya raw string ho
+    # और _ जैसे कैरेक्टर Telegram Markdown द्वारा parse न हों
+    match = re.search(r"/(wordchain|guessing|wordcorrection)\\nque\.\s*(.*?)\\nans\.\s*(.*)", game_data_text, re.DOTALL | re.IGNORECASE)
 
     if match:
         game_type = match.group(1).lower()
         question = match.group(2).strip()
         answer = match.group(3).strip()
 
+        # Sanitize question and answer to prevent Telegram Markdown parsing issues
+        # Common problematic chars: _ * [ ] ( ) ~ ` > # + - = | { } . !
+        # Here we only escape the backslash for now, but more might be needed
+        # For full markdown escaping, telegram.helpers.escape_markdown is typically used for sending messages.
+        # But here, we're parsing input, so just ensuring the input format is strict.
+        
+        # If the user enters `_`, it should be interpreted literally.
+        # Advise user to use `\\n` for newlines in the command
+        
         try:
             # Game data ko game channel par post karein
+            # Markdown parsing for the message being *sent* to the channel
+            # Use Plain Text for the content and let the regex handle extraction
             posted_message = await context.bot.send_message(
                 chat_id=GAME_CHANNEL_ID,
-                text=game_data_text,
-                parse_mode=ParseMode.MARKDOWN # Agar aapke question/answer mein markdown hai
+                text=f"/{game_type}\nque. {question}\nans. {answer}", # Raw text to avoid parsing issues in channel
+                parse_mode=ParseMode.HTML # Changed to HTML to allow basic formatting, but keep content raw for parsing
             )
             
             # Post ki gayi message ki ID ko MongoDB mein save karein
@@ -622,7 +665,92 @@ async def add_game_content_command(update: Update, context: ContextTypes.DEFAULT
             await send_log_message(context, f"Unexpected error in add_game_content_command: {e}")
     else:
         await update.message.reply_text("Game content format invalid. Kripya sahi format use karein.\n"
-                                        "Example: `/addgame /wordchain\\nque. A_ P_ L_\\nans. APPLE`")
+                                        "Example: `/addgame /wordchain\\nque. A_ P_ L_\\nans. APPLE`\n"
+                                        "Note: `\\n` ka matlab hai 'new line'.")
+
+
+# --- Post-Initialization Setup ---
+async def post_init_setup(application: telegram.ext.Application):
+    """
+    Bot के शुरू होने और polling/webhook सेट होने के बाद चलने वाला सेटअप।
+    इसमें मौजूदा गेम स्टेट्स को रिलोड करना और उनके जॉब्स को री-शेड्यूल करना शामिल है।
+    """
+    logger.info("Running post-initialization setup...")
+    if db_manager.connected:
+        existing_games_collection = db_manager.get_collection("game_states")
+        if existing_games_collection is not None:
+            for game_data in existing_games_collection.find({}):
+                try:
+                    game_instance = create_game(
+                        game_data["game_type"],
+                        game_data["_id"],
+                        game_data["group_id"],
+                        game_data["question"],
+                        game_data["answer"]
+                    )
+                    if game_instance:
+                        # Load remaining properties
+                        game_instance.players = game_data.get("players", [])
+                        game_instance.current_player_index = game_data.get("current_player_index", 0)
+                        game_instance.status = game_data.get("status", "waiting_for_players")
+                        game_instance.join_window_end_time = game_data.get("join_window_end_time", 0)
+                        game_instance.last_activity_time = game_data.get("last_activity_time", 0)
+                        game_instance.turn_timeout = game_data.get("turn_timeout", 30)
+
+                        if game_instance.game_type == "wordchain":
+                            game_instance.last_word_played = game_data.get("last_word_played")
+                        elif game_instance.game_type == "guessing":
+                            game_instance.guessed_letters = set(game_data.get("guessed_letters", []))
+
+                        active_games[game_instance.group_id] = game_instance
+                        logger.info(f"Loaded active game {game_instance.game_id} in group {game_instance.group_id}.")
+
+                        # Re-schedule jobs if game is still active
+                        if game_instance.status == "waiting_for_players":
+                            current_time = asyncio.get_event_loop().time()
+                            time_to_run = max(1, int(game_instance.join_window_end_time - current_time))
+                            if time_to_run > 0: # Only schedule if there's time left
+                                application.job_queue.run_once(
+                                    lambda ctx: send_game_join_alerts(ctx, game_instance),
+                                    time_to_run,
+                                    data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
+                                    name=f"join_alert_{game_instance.game_id}"
+                                )
+                                logger.info(f"Rescheduled join alert for game {game_instance.game_id} in {time_to_run} seconds.")
+                            else:
+                                logger.info(f"Join window for game {game_instance.game_id} already expired. Attempting to start/cancel.")
+                                # Manually trigger the alert logic to immediately evaluate
+                                # Create a dummy context for this immediate call if needed, but it's better
+                                # to ensure send_game_join_alerts can handle expired times.
+                                # The send_game_join_alerts function itself should handle time_left <= 0.
+                                application.create_task(send_game_join_alerts(application.updater.dispatcher.bot.get_context(), game_instance))
+
+
+                        elif game_instance.status == "in_progress":
+                            current_time = asyncio.get_event_loop().time()
+                            time_since_last_activity = current_time - game_instance.last_activity_time
+                            time_to_run = max(1, int(game_instance.turn_timeout - time_since_last_activity))
+                            if time_to_run > 0: # Only schedule if there's time left
+                                application.job_queue.run_once(
+                                    lambda ctx: check_turn_timeout(ctx, game_instance.game_id),
+                                    time_to_run,
+                                    data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
+                                    name=f"turn_timeout_{game_instance.game_id}"
+                                )
+                                logger.info(f"Rescheduled turn timeout for game {game_instance.game_id} in {time_to_run} seconds.")
+                            else:
+                                logger.info(f"Turn timeout for game {game_instance.game_id} already expired. Attempting to check timeout.")
+                                # Manually trigger the timeout logic to immediately evaluate
+                                application.create_task(check_turn_timeout(application.updater.dispatcher.bot.get_context(), game_instance.game_id))
+
+                    else:
+                        logger.error(f"Failed to create game instance for loaded data: {game_data}")
+                except Exception as e:
+                    logger.error(f"Error loading game state {game_data.get('_id')}: {e}")
+        else:
+            logger.warning("Could not retrieve 'game_states' collection on startup or collection is None. Skipping game state reload.")
+    else:
+        logger.warning("MongoDB not connected. Skipping existing game states reload.")
 
 
 # --- Bot Initialization ---
@@ -644,65 +772,8 @@ def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Reload existing game states on startup
-    # Yeh part tabhi run karein jab db_manager.connected ho
-    if db_manager.connected: # IMPORTANT: Added check here
-        existing_games_collection = db_manager.get_collection("game_states")
-        # Ensure collection was retrieved successfully and it's not None
-        if existing_games_collection is not None: 
-            for game_data in existing_games_collection.find({}): 
-                try:
-                    game_instance = create_game(
-                        game_data["game_type"],
-                        game_data["_id"],
-                        game_data["group_id"],
-                        game_data["question"],
-                        game_data["answer"]
-                    )
-                    if game_instance:
-                        # Load remaining properties
-                        game_instance.players = game_data.get("players", [])
-                        game_instance.current_player_index = game_data.get("current_player_index", 0)
-                        game_instance.status = game_data.get("status", "waiting_for_players")
-                        game_instance.join_window_end_time = game_data.get("join_window_end_time", 0)
-                        game_instance.last_activity_time = game_data.get("last_activity_time", 0)
-                        game_instance.turn_timeout = game_data.get("turn_timeout", 30)
-
-                        if game_instance.game_type == "wordchain": # Specific for wordchain
-                            game_instance.last_word_played = game_data.get("last_word_played")
-                        elif game_instance.game_type == "guessing": # Specific for guessing
-                            game_instance.guessed_letters = set(game_data.get("guessed_letters", []))
-
-                        active_games[game_instance.group_id] = game_instance
-                        logger.info(f"Loaded active game {game_instance.game_id} in group {game_instance.group_id}.")
-                        
-                        # Re-schedule jobs if game is still active
-                        if game_instance.status == "waiting_for_players":
-                            context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
-                            application.job_queue.run_once(
-                                lambda ctx: send_game_join_alerts(ctx, game_instance),
-                                max(1, int(game_instance.join_window_end_time - asyncio.get_event_loop().time())),
-                                data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
-                                name=f"join_alert_{game_instance.game_id}"
-                            )
-                        elif game_instance.status == "in_progress":
-                            context = ContextTypes.DEFAULT_TYPE(application=application, chat_id=game_instance.group_id)
-                            application.job_queue.run_once(
-                                lambda ctx: check_turn_timeout(ctx, game_instance.game_id),
-                                max(1, int(game_instance.turn_timeout - (asyncio.get_event_loop().time() - game_instance.last_activity_time))),
-                                data={"game_id": game_instance.game_id, "chat_id": game_instance.group_id},
-                                name=f"turn_timeout_{game_instance.game_id}"
-                            )
-
-                    else:
-                        logger.error(f"Failed to create game instance for loaded data: {game_data}")
-                except Exception as e:
-                    logger.error(f"Error loading game state {game_data.get('_id')}: {e}")
-        else:
-            logger.warning("Could not retrieve 'game_states' collection on startup or collection is None. Skipping game state reload.")
-    else:
-        logger.warning("MongoDB not connected. Skipping existing game states reload.")
-
+    # Post-initialization setup ko register karein
+    application.post_init(post_init_setup)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
@@ -718,7 +789,6 @@ if __name__ == "__main__":
         exit(1)
 
     # MongoDB connection check yahan pehle karein
-    # यह सिर्फ एक बार किया जाता है
     if not db_manager.connected:
         logger.error("Failed to connect to MongoDB. Exiting.")
         exit(1)
@@ -729,4 +799,3 @@ if __name__ == "__main__":
     
     # Run the bot only if MongoDB connection is successful
     run_bot()
-
