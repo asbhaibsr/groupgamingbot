@@ -21,7 +21,8 @@ class MongoDB:
 
         try:
             self.client = MongoClient(mongo_uri)
-            self.client.admin.command('ping') # Test connection
+            # Test connection by pinging the admin database
+            self.client.admin.command('ping') 
             self.db = self.client.get_database("telegram_games_db")
             self.connected = True
             logger.info("MongoDB connected successfully!")
@@ -33,20 +34,28 @@ class MongoDB:
     def _ensure_indexes(self):
         """Collections ke liye zaroori indexes banata hai."""
         if self.db:
-            # game_states collection ke liye index
-            self.db.game_states.create_index([("group_id", ASCENDING)], unique=True, name="group_id_idx")
-            logger.info("Index created for game_states.group_id")
+            try:
+                # game_states collection ke liye index
+                self.db.game_states.create_index([("group_id", ASCENDING)], unique=True, name="group_id_idx")
+                logger.info("Index created for game_states.group_id")
 
-            # user_stats collection ke liye index
-            self.db.user_stats.create_index([("user_id", ASCENDING)], unique=True, name="user_id_idx")
-            logger.info("Index created for user_stats.user_id")
+                # user_stats collection ke liye index
+                self.db.user_stats.create_index([("user_id", ASCENDING)], unique=True, name="user_id_idx")
+                logger.info("Index created for user_stats.user_id")
 
-            # game_content collection ke liye index
-            # game_message_id ko unique index banate hain takki duplicate na ho
-            self.db.game_content.create_index([("game_message_id", ASCENDING)], unique=True, name="game_message_id_idx")
-            # created_at par index takki oldest entries ko delete kar saken
-            self.db.game_content.create_index([("created_at", ASCENDING)], name="created_at_idx")
-            logger.info("Indexes created for game_content collection.")
+                # game_content collection ke liye index
+                # game_message_id ko unique index banate hain takki duplicate na ho
+                self.db.game_content.create_index([("game_message_id", ASCENDING)], unique=True, name="game_message_id_idx")
+                # created_at par index takki oldest entries ko delete kar saken
+                self.db.game_content.create_index([("created_at", ASCENDING)], name="created_at_idx")
+                logger.info("Indexes created for game_content collection.")
+            except Exception as e:
+                # Agar index creation mein error aaye, to bhi connection ko True rakhein
+                # Kyunki MongoDB client successfully connect ho chuka hai.
+                logger.error(f"Error ensuring MongoDB indexes: {e}. Connection will remain active if initial connection succeeded.")
+                # self.connected ko yahan False na karein, agar main connection bana hua hai
+        else:
+            logger.warning("Cannot ensure indexes: MongoDB not connected.")
 
 
     def get_collection(self, collection_name):
@@ -142,7 +151,7 @@ class MongoDB:
             "created_at": <timestamp>
         }
         """
-        if self.db is not None:
+        if self.connected: # self.db is not None ki jagah self.connected use karein for consistency
             game_content_col = self.get_collection("game_content")
             try:
                 # game_message_id unique hai, replace_one se upsert karein
@@ -162,7 +171,7 @@ class MongoDB:
         """
         Ek random game content item ka Telegram message ID retrieve karta hai game_type ke hisaab se.
         """
-        if self.db is not None:
+        if self.connected: # self.db is not None ki jagah self.connected use karein for consistency
             game_content_col = self.get_collection("game_content")
             # Aggregation pipeline to get a random document
             pipeline = [
@@ -178,7 +187,7 @@ class MongoDB:
 
     def get_game_content_count(self):
         """game_content collection mein documents ki sankhya return karta hai."""
-        if self.db is not None:
+        if self.connected: # self.db is not None ki jagah self.connected use karein for consistency
             game_content_col = self.get_collection("game_content")
             return game_content_col.estimated_document_count()
         return 0
@@ -188,7 +197,7 @@ class MongoDB:
         oldest game content entries ko delete karta hai (Telegram message IDs).
         Return karta hai deleted message IDs ki list.
         """
-        if self.db is not None:
+        if self.connected: # self.db is not None ki jagah self.connected use karein for consistency
             game_content_col = self.get_collection("game_content")
             try:
                 # Oldest documents ko fetch karein by created_at
