@@ -1958,16 +1958,21 @@ if POLL_HANDLER_AVAILABLE:
 else:
     @app.on_poll_answer()
     async def poll_answer_wrapper(client: Client, poll_answer: PollAnswer):
+        # Yeh line (await...) ek indent andar honi chahiye
         await handle_quiz_poll_answer(poll_answer, client)
 
 # Flask server
+# Yeh "def" bilkul shuru se (zero indent) shuru hona chahiye
 def run_flask():
     """Run Flask server in a thread"""
-    flask_app.run(host="0.0.0.0", port=8080)
+    # Iske andar ka code indent hoga
+    flask_app.run(host="00.0.0.0", port=8080)
 
 # Main function
+# Yeh "async def" bilkul shuru se (zero indent) shuru hona chahiye
 async def main():
     """Start the bot"""
+    # Iske andar ka code indent hoga
     init_mongo()
     await load_game_states()
 
@@ -2002,8 +2007,10 @@ async def main():
     await idle()
     await app.stop()
 
+# Yeh "if __name__" bilkul shuru se (zero indent) shuru hona chahiye
 if __name__ == "__main__":
     try:
+        # Iske andar ka code indent hoga
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
