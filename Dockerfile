@@ -17,6 +17,6 @@ COPY . .
 
 # Verify installation
 RUN python -c "import pyrogram; print(f'Pyrogram Version: {pyrogram.__version__}')"
-RUN python -c "from pyrogram.handlers import PollAnswerHandler; print('PollAnswerHandler Import SUCCESS')"
+RUN python -c "from pyrogram import __version__; assert __version__ == '2.0.106', f'Wrong version: {__version__}'"
 
 CMD ["python", "bot.py"]
