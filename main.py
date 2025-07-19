@@ -670,6 +670,10 @@ async def add_game_content_command(update: Update, context: ContextTypes.DEFAULT
 
 
 # --- Post-Initialization Setup ---
+# *** YAHAN BADLAV KIYA GAYA HAI ***
+# post_init_setup ab application object ko seedha lega.
+# context.bot.get_context() ko application.updater.dispatcher.bot.get_context() se replace kiya gaya hai
+# taaki context sahi samay par available ho.
 async def post_init_setup(application: telegram.ext.Application):
     """
     Bot के शुरू होने और polling/webhook सेट होने के बाद चलने वाला सेटअप।
@@ -706,8 +710,13 @@ async def post_init_setup(application: telegram.ext.Application):
                         logger.info(f"Loaded active game {game_instance.game_id} in group {game_instance.group_id}.")
 
                         # Re-schedule jobs if game is still active
+                        current_time = asyncio.get_event_loop().time()
+                        
+                        # Get a context for scheduling jobs
+                        # This is the crucial change for reliable context access in post_init
+                        context_for_jobs = application.updater.dispatcher.bot.get_context() 
+
                         if game_instance.status == "waiting_for_players":
-                            current_time = asyncio.get_event_loop().time()
                             time_to_run = max(1, int(game_instance.join_window_end_time - current_time))
                             if time_to_run > 0: # Only schedule if there's time left
                                 application.job_queue.run_once(
@@ -720,14 +729,10 @@ async def post_init_setup(application: telegram.ext.Application):
                             else:
                                 logger.info(f"Join window for game {game_instance.game_id} already expired. Attempting to start/cancel.")
                                 # Manually trigger the alert logic to immediately evaluate
-                                # Create a dummy context for this immediate call if needed, but it's better
-                                # to ensure send_game_join_alerts can handle expired times.
-                                # The send_game_join_alerts function itself should handle time_left <= 0.
-                                application.create_task(send_game_join_alerts(application.updater.dispatcher.bot.get_context(), game_instance))
+                                application.create_task(send_game_join_alerts(context_for_jobs, game_instance))
 
 
                         elif game_instance.status == "in_progress":
-                            current_time = asyncio.get_event_loop().time()
                             time_since_last_activity = current_time - game_instance.last_activity_time
                             time_to_run = max(1, int(game_instance.turn_timeout - time_since_last_activity))
                             if time_to_run > 0: # Only schedule if there's time left
@@ -741,7 +746,7 @@ async def post_init_setup(application: telegram.ext.Application):
                             else:
                                 logger.info(f"Turn timeout for game {game_instance.game_id} already expired. Attempting to check timeout.")
                                 # Manually trigger the timeout logic to immediately evaluate
-                                application.create_task(check_turn_timeout(application.updater.dispatcher.bot.get_context(), game_instance.game_id))
+                                application.create_task(check_turn_timeout(context_for_jobs, game_instance.game_id))
 
                     else:
                         logger.error(f"Failed to create game instance for loaded data: {game_data}")
@@ -773,7 +778,8 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Post-initialization setup ko register karein
-    application.post_init(post_init_setup)
+    # *** YAHAN BHI BADLAV KIYA GAYA HAI ***
+    application.post_init(post_init_setup) 
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
