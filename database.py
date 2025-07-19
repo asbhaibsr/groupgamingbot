@@ -6,14 +6,18 @@ class MongoDB:
     def __init__(self):
         self.client = None
         self.db = None
-        self.connect()
+        # MongoDB se connect karne ki koshish karein jab object banaya jata hai
+        self.connected = self.connect()
 
     def connect(self):
-        """MongoDB se connect karta hai."""
+        """
+        MongoDB se connect karta hai.
+        Safalta par True, vifalta par False return karta hai.
+        """
         mongo_uri = os.getenv("MONGO_URI")
         if not mongo_uri:
             print("Error: MONGO_URI environment variable not set.")
-            return
+            return False
 
         try:
             self.client = MongoClient(mongo_uri)
@@ -21,22 +25,26 @@ class MongoDB:
             self.client.admin.command('ping')
             self.db = self.client["telegram_game_bot"] # Apne database ka naam
             print("Successfully connected to MongoDB!")
+            return True # Safal connection
         except ConnectionFailure as e:
             print(f"MongoDB connection failed: {e}")
             self.client = None
             self.db = None
+            return False # Vifal connection
         except OperationFailure as e:
             print(f"MongoDB authentication/operation failed: {e}")
             self.client = None
             self.db = None
+            return False # Vifal connection
         except Exception as e:
             print(f"An unexpected error occurred during MongoDB connection: {e}")
             self.client = None
             self.db = None
+            return False # Vifal connection
 
     def get_collection(self, collection_name):
         """Ek specific collection return karta hai."""
-        if self.db:
+        if self.db: # Ab yeh check sahi hai kyunki self.db ya toh Database object hoga ya None
             return self.db[collection_name]
         print("Error: MongoDB not connected.")
         return None
@@ -115,29 +123,33 @@ if __name__ == "__main__":
 
     db_manager = MongoDB()
 
-    # Test saving game state
-    test_game_id = "test_game_123"
-    db_manager.save_game_state({
-        "_id": test_game_id,
-        "group_id": 12345,
-        "game_type": "wordchain",
-        "current_question": "A _ P _ L _",
-        "correct_answer": "APPLE",
-        "players": [],
-        "game_status": "in_progress"
-    })
+    if db_manager.connected:
+        # Test saving game state
+        test_game_id = "test_game_123"
+        db_manager.save_game_state({
+            "_id": test_game_id,
+            "group_id": 12345,
+            "game_type": "wordchain",
+            "current_question": "A _ P _ L _",
+            "correct_answer": "APPLE",
+            "players": [],
+            "game_status": "in_progress"
+        })
 
-    # Test getting game state
-    game_state = db_manager.get_game_state(test_game_id)
-    if game_state:
-        print(f"Retrieved game state: {game_state}")
+        # Test getting game state
+        game_state = db_manager.get_game_state(test_game_id)
+        if game_state:
+            print(f"Retrieved game state: {game_state}")
 
-    # Test updating user stats
-    test_user_id = 98765
-    db_manager.update_user_stats(test_user_id, "TestUser", {"games_played": 1, "total_score": 10})
-    user_stats = db_manager.get_user_stats(test_user_id)
-    if user_stats:
-        print(f"Retrieved user stats: {user_stats}")
+        # Test updating user stats
+        test_user_id = 98765
+        db_manager.update_user_stats(test_user_id, "TestUser", {"games_played": 1, "total_score": 10})
+        user_stats = db_manager.get_user_stats(test_user_id)
+        if user_stats:
+            print(f"Retrieved user stats: {user_stats}")
 
-    # Test deleting game state
-    db_manager.delete_game_state(test_game_id)
+        # Test deleting game state
+        db_manager.delete_game_state(test_game_id)
+    else:
+        print("MongoDB connection failed, cannot run tests.")
+
