@@ -926,7 +926,7 @@ async def button_handler(client: Client, query: CallbackQuery):
 
 # --- Pyrogram Message Handlers (for general text and game answers) ---
 
-@app.on_message(filters.text & ~filters.command & filters.group)
+@app.on_message(filters.text & ~filters.command() & filters.group)
 async def handle_text_messages(client: Client, message: Message):
     chat_id = message.chat.id
     game_state = active_games.get(chat_id)
