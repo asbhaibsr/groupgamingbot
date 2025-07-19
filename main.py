@@ -155,7 +155,6 @@ async def check_and_manage_game_content_storage(context: ContextTypes.DEFAULT_TY
 
 
 async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGame):
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     try:
         if game.status != "waiting_for_players":
             return
@@ -217,7 +216,6 @@ async def send_game_join_alerts(context: ContextTypes.DEFAULT_TYPE, game: BaseGa
         logger.error(f"Error in send_game_join_alerts for game {game.game_id}: {e}")
 
 async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     chat_id = context.job.data["chat_id"]
     if chat_id in active_games:
         game = active_games[chat_id]
@@ -265,7 +263,6 @@ async def check_turn_timeout(context: ContextTypes.DEFAULT_TYPE, game_id: str):
             job.schedule_removal()
 
 async def end_game_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reason: str):
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     if chat_id in active_games:
         game = active_games[chat_id]
         game_id = game.game_id
@@ -303,7 +300,6 @@ async def end_game_logic(context: ContextTypes.DEFAULT_TYPE, chat_id: int, reaso
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     if update.effective_user is None:
         logger.warning("Start command received with no effective user.")
         return
@@ -318,7 +314,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_log_message(context, f"User {user.id} ({user.username}) started the bot in chat {update.effective_chat.id}.")
 
 async def games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     keyboard = [
         [InlineKeyboardButton("Wordchain Game", callback_data="start_game_wordchain")],
         [InlineKeyboardButton("Guessing Game", callback_data="start_game_guessing")],
@@ -336,7 +331,6 @@ async def games(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(rules_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     query = update.callback_query
     await query.answer()
 
@@ -398,7 +392,6 @@ async def start_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE, gam
         await send_log_message(context, f"Invalid game type '{game_type}' requested in group {chat_id}.")
 
 async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     chat_id = update.effective_chat.id
     if chat_id in active_games:
         game = active_games[chat_id]
@@ -415,12 +408,10 @@ async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
         await update.effective_message.reply_text("Is group mein koi active game nahi hai jise join kiya ja sake. `/games` se naya shuru karein.")
 
 async def endgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     chat_id = update.effective_chat.id
     await end_game_logic(context, chat_id, "Command se khatm kiya gaya")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     chat_id = update.effective_chat.id
     
     if update.effective_user is None:
@@ -495,7 +486,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text(f"Abhi **{game.get_current_player()['username']}** ki baari hai.", parse_mode=ParseMode.MARKDOWN)
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     if update.effective_user is None:
         logger.warning("My stats command received with no effective user.")
         await update.message.reply_text("Aapke stats display nahi kiye ja sakte kyunki user information available nahi hai.")
@@ -523,7 +513,6 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     if not db_manager.connected: # Add this check
         await update.message.reply_text("Database se connect nahi ho paya. Leaderboard retrieve nahi kar sakte.")
         logger.error("Cannot retrieve leaderboard: MongoDB not connected.")
@@ -540,7 +529,6 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (यह फंक्शन पहले जैसा ही रहेगा) ...
     if update.effective_user is None:
         logger.warning("Broadcast command received with no effective user. Cannot check owner ID.")
         await update.message.reply_text("Broadcast command execute nahi ho sakta kyunki user information available nahi hai.")
@@ -660,8 +648,9 @@ def run_bot():
     # Yeh part tabhi run karein jab db_manager.connected ho
     if db_manager.connected: # IMPORTANT: Added check here
         existing_games_collection = db_manager.get_collection("game_states")
-        if existing_games_collection: # Ensure collection was retrieved successfully
-            for game_data in existing_games_collection.find({}): # Now this is safe
+        # Ensure collection was retrieved successfully and it's not None
+        if existing_games_collection is not None: 
+            for game_data in existing_games_collection.find({}): 
                 try:
                     game_instance = create_game(
                         game_data["game_type"],
@@ -710,7 +699,7 @@ def run_bot():
                 except Exception as e:
                     logger.error(f"Error loading game state {game_data.get('_id')}: {e}")
         else:
-            logger.warning("Could not retrieve 'game_states' collection on startup. Skipping game state reload.")
+            logger.warning("Could not retrieve 'game_states' collection on startup or collection is None. Skipping game state reload.")
     else:
         logger.warning("MongoDB not connected. Skipping existing game states reload.")
 
@@ -729,6 +718,7 @@ if __name__ == "__main__":
         exit(1)
 
     # MongoDB connection check yahan pehle karein
+    # यह सिर्फ एक बार किया जाता है
     if not db_manager.connected:
         logger.error("Failed to connect to MongoDB. Exiting.")
         exit(1)
